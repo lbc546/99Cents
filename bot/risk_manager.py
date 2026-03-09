@@ -192,7 +192,8 @@ class RiskManager:
     # Circuit breakers
     # ------------------------------------------------------------------
 
-    def is_trading_allowed(self, available_capital: float) -> tuple[bool, str]:
+    def is_trading_allowed(self, available_capital: float,
+                           wallet_balance: float | None = None) -> tuple[bool, str]:
         """Check all circuit breaker conditions.
 
         Returns (allowed, reason_if_blocked).
@@ -215,9 +216,11 @@ class RiskManager:
         if self._consecutive_failures >= self.config.consecutive_failure_limit:
             return False, "consecutive_failures=%d" % self._consecutive_failures
 
-        # 5. Capital floor
-        if available_capital < self.config.capital_floor:
-            return False, "capital_floor_breached=%.2f" % available_capital
+        # 5. Capital floor — check actual wallet balance, not deployment budget.
+        #    Deployment limits are enforced separately by available_capital checks.
+        balance = wallet_balance if wallet_balance is not None else available_capital
+        if balance < self.config.capital_floor:
+            return False, "capital_floor_breached=%.2f" % balance
 
         return True, ""
 

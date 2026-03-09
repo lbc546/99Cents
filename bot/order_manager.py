@@ -389,7 +389,8 @@ class OrderManager:
                 return
 
             allowed, cb_reason = self.risk_manager.is_trading_allowed(
-                self.available_capital)
+                self.available_capital,
+                wallet_balance=self._wallet_balance)
             if not allowed:
                 self._log_skip(market_id, token_id, question, category,
                                "circuit_breaker=%s" % cb_reason)

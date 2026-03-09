@@ -129,6 +129,8 @@ class Redeemer:
                                        pos.market_id, pos.question)
                 # Also check for positions redeemed externally (e.g. via website)
                 self.order_manager.sync_redeemed_positions()
+                # Refresh wallet balance to reflect redemptions
+                self.order_manager.sync_wallet_balance()
             except Exception:
                 logger.exception("Redemption check error")
 
