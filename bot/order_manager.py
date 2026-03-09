@@ -310,9 +310,11 @@ class OrderManager:
 
     @property
     def available_capital(self) -> float:
+        # How much more we're allowed to deploy (policy limit)
         cap = self.config.max_total_deployed - self.total_deployed
+        # Don't deploy more than what's actually in the wallet
         if self._wallet_balance is not None:
-            cap = min(cap, self._wallet_balance - self.total_deployed)
+            cap = min(cap, self._wallet_balance)
         return max(cap, 0)
 
     def _has_position_in_market(self, market_id: str, condition_id: str = "",
