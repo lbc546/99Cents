@@ -28,7 +28,17 @@ CTF_REDEEM_ABI = [
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function",
-    }
+    },
+    {
+        "inputs": [
+            {"name": "conditionId", "type": "bytes32"},
+            {"name": "index", "type": "uint256"},
+        ],
+        "name": "payoutNumerators",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 
@@ -110,6 +120,10 @@ class Redeemer:
                                 net_profit=-pos.cost, gas_cost=0.0)
                             pos.status = "disputed"
                             continue
+
+                    # Verify on-chain resolution before spending gas
+                    if not await self._is_resolved_onchain(pos):
+                        continue
 
                     await self._redeem(pos.order_id, pos.condition_id,
                                        pos.market_id, pos.question)
@@ -215,6 +229,38 @@ class Redeemer:
 
         except Exception:
             logger.exception("Redemption failed for market %s", market_id)
+
+    async def _is_resolved_onchain(self, pos) -> bool:
+        """Check payoutNumerators on-chain before attempting redemption.
+
+        Returns True only if the condition is confirmed resolved on-chain.
+        This prevents wasting gas on txs that will revert with
+        'result for condition not received yet'.
+        """
+        if not pos.condition_id:
+            return False
+
+        self._init_web3()
+        if not self._w3 or not self._contract:
+            return False  # Can't check, don't attempt
+
+        try:
+            cond_hex = pos.condition_id.replace("0x", "")
+            cond_bytes = bytes.fromhex(cond_hex)
+            cond_bytes32 = cond_bytes.ljust(32, b"\x00")
+
+            # payoutNumerators is on the CTF contract
+            payout = await asyncio.to_thread(
+                self._contract.functions.payoutNumerators(cond_bytes32, 0).call
+            )
+            if payout > 0:
+                return True
+            logger.debug("Condition %s not resolved on-chain yet, skipping redemption",
+                         pos.condition_id[:18])
+            return False
+        except Exception:
+            logger.debug("On-chain resolution check failed for %s", pos.condition_id[:18])
+            return False
 
     async def _is_market_resolved(self, pos) -> bool:
         """Check if the market has actually resolved via Gamma API.
