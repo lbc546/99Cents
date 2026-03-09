@@ -1,0 +1,31 @@
+[Unit]
+Description=99Cents Polymarket Settlement Arbitrage Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+Group=botuser
+WorkingDirectory=/opt/99cents
+EnvironmentFile=/opt/99cents/.env
+ExecStart=/opt/99cents/.venv/bin/python -m bot.main /opt/99cents/config.yaml
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logging — stdout/stderr go to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=99cents
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/99cents
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

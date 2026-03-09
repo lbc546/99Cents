@@ -1,0 +1,99 @@
+# Polymarket Settlement Arbitrage Bot Configuration
+# All parameters are externalized here. Secrets go in environment variables.
+
+# --- Trading Parameters ---
+price_threshold: 0.99              # Max price to pay for winning shares
+max_position_per_market: 50        # Max USDC per single market
+max_total_deployed: 750            # Max USDC deployed across all positions
+max_open_positions: 15             # Max concurrent open positions
+min_liquidity_usdc: 20             # Min USDC of liquidity available at threshold price
+capital_floor: 100                 # Stop trading if Polymarket balance drops below this (minimum reserve)
+
+# --- Market Filtering ---
+# Blocklist approach: block risky categories, allow everything else.
+# Sports/Esports BLOCKED: endDate = tournament end (not match end), so we
+#   cannot tell if a match is still in progress. Mid-game $0.99 ≠ concluded.
+# Entertainment BLOCKED: endDate semantics too inconsistent.
+# Everything else (Politics, Crypto, Weather, etc.) passes through —
+#   price/liquidity/resolution filters handle the rest.
+blocked_categories: ["Sports", "Esports", "Entertainment"]
+surprise_price_cutoff: 0.50        # Filter markets that traded below this near close
+high_confidence_threshold: 0.98    # Pre-resolution: accept leading outcome >= this price
+
+# --- Order Execution ---
+order_type: "GTC"                  # GTC limit orders (not market orders)
+order_ttl_seconds: 300             # Cancel unfilled orders after 5 minutes
+tick_size: "0.01"                  # Minimum price increment
+min_net_profit: 0.30               # Skip if expected net profit below this (USD)
+min_position_size: 35              # Skip if position would be under $35 (need $35 min to clear $0.30 net at $0.99)
+estimated_gas_cost_usd: 0.05       # Estimated Polygon gas cost per transaction in USD
+platform_fee_rate: 0.0             # Polymarket fee rate (0 for fee-free markets)
+crypto_short_term_fee_rate: 0.0    # 0% maker fee (bot posts GTC limit orders)
+crypto_short_term_price_threshold: 0.99  # Same as normal — maker fee is 0%
+max_retries_on_failure: 1          # Retry once on failed transaction
+retry_delay_seconds: 2             # Wait before retrying a failed order
+
+# --- Timing ---
+polling_interval_seconds: 120      # How often to poll Gamma API for new markets (WS handles real-time)
+redeem_check_interval_seconds: 60  # How often to check for redeemable positions
+ws_ping_interval_seconds: 10       # WebSocket heartbeat interval
+ws_reconnect_base_seconds: 5       # Base delay for WebSocket reconnection backoff
+
+# --- API Endpoints ---
+clob_base_url: "https://clob.polymarket.com"
+gamma_base_url: "https://gamma-api.polymarket.com"
+ws_market_url: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+ws_user_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+
+# --- Blockchain ---
+chain_id: 137                      # Polygon mainnet
+polygon_rpc_url: "https://polygon-rpc.com"   # Overridden by POLYGON_RPC_URL env var
+usdc_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+ctf_exchange_address: "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
+
+# --- Logging ---
+log_file: "bot.log"
+log_level: "INFO"
+
+# --- Scanner / Watchlist ---
+watchlist_max_age_hours: 48        # Drop markets from watchlist after 48 hours unsettled
+end_date_grace_minutes: 30         # Default grace (used for unknown categories)
+end_date_grace_by_category:
+  Crypto: 5                        # Price data is instant — 5 min buffer for API lag
+  Economics/Finance: 5             # Forex/econ data published at known times
+  Science/Weather: 10              # Weather data may take slightly longer to finalize
+  Politics: 30                     # Election results take longer to call/certify
+price_history_window_hours: 2      # Look-back window for surprise pricing check
+gamma_poll_max_pages: 5            # Max pages per Gamma poll cycle (incremental = usually 1-2)
+gamma_poll_limit: 100              # Markets per Gamma API page
+watchlist_scan_interval_seconds: 120   # How often to re-evaluate watchlist entries
+watchlist_recheck_cooldown_seconds: 300  # Skip entries checked less than 5 min ago
+watchlist_max_checks_per_cycle: 10     # Cap Gamma fetches per watchlist scan cycle
+
+# --- Rate Limiting ---
+clob_rate_limit_per_min: 85        # Target CLOB req/min (API limit is 100)
+gamma_rate_limit_per_min: 120      # Target Gamma req/min (defensive, no documented limit)
+
+# --- Safety ---
+dry_run: false                     # LIVE trading mode — real orders and on-chain txns
+
+# --- Risk Management ---
+blacklist_manual: []                   # Market IDs to always blacklist
+daily_loss_limit: 15.0                 # Auto-pause if daily net loss exceeds this (USD)
+consecutive_failure_limit: 10          # Auto-pause after N consecutive failed orders
+stats_log_interval_seconds: 600        # Log daily stats every 10 minutes
+
+# --- Settlement Tracker ---
+ct_framework_address: "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+rpc_poll_interval_seconds: 30        # On-chain resolution check interval
+rpc_poll_batch_size: 5               # Max concurrent RPC calls per cycle
+settlement_timeout_hours:
+  Crypto: 8                          # Flag Crypto unsettled > 8 hours
+  Esports: 24                        # Flag Esports unsettled > 24 hours
+  default: 24                        # Default for other categories
+price_movement_alert_threshold: 0.03 # Alert if price drops > $0.03 after entry
+esports_variance_cv_threshold: 1.5   # Esports CV threshold for variance alert
+
+# --- Dashboard ---
+dashboard_enabled: true              # Enable rich terminal dashboard
+dashboard_refresh_seconds: 5         # Dashboard refresh interval

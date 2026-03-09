@@ -1,0 +1,390 @@
+"""Market filtering logic for the arbitrage bot.
+
+Reuses category inference and crypto detection from the analysis scripts.
+"""
+
+import json
+import math
+import re
+from datetime import datetime, timedelta, timezone
+
+
+def is_crypto_short_term(question: str) -> bool:
+    """Detect 5min/15min crypto markets by question text.
+
+    These markets have up to 1.56% taker fees, killing the 1% margin.
+    Matches patterns like: 'Bitcoin Up or Down - February 28, 1:45AM-1:50AM ET'
+
+    Must NOT match long-term markets with a single deadline time, e.g.
+    'Will Bitcoin hit $100K by December 31, 2:00 PM ET?'
+    """
+    q = question if isinstance(question, str) else ""
+    # Pattern 1: "Bitcoin Up or Down" — always short-term fee markets
+    if re.search(
+        r"(?i)(?:bitcoin|ethereum|solana|xrp|dogecoin|matic|btc|eth|sol|doge)\s+up\s+or\s+down",
+        q,
+    ):
+        return True
+    # Pattern 2: Time RANGE like "1:45AM-1:50AM" — distinctive 5min/15min pattern
+    if re.search(
+        r"(?i)(?:bitcoin|ethereum|solana|xrp|btc|eth|sol|doge)"
+        r".*\d+:\d+\s*(?:AM|PM)\s*[-–]\s*\d+:\d+\s*(?:AM|PM)",
+        q,
+    ):
+        return True
+    # Pattern 3: Explicit short interval mentions
+    if re.search(
+        r"(?i)(?:bitcoin|ethereum|solana|xrp|btc|eth|sol|doge)"
+        r".*\b(?:5|15)\s*[-\s]?(?:min|minute)",
+        q,
+    ):
+        return True
+    return False
+
+
+def _word_match(q: str, words: list[str]) -> bool:
+    """Match keywords using word boundaries for short tokens to avoid
+    false positives like 'eth ' matching 'Beth ' or 'sol ' matching 'Solomon'.
+    """
+    for w in words:
+        if len(w.strip()) <= 4:
+            # Short tokens need word-boundary matching
+            if re.search(r'\b' + re.escape(w.strip()) + r'\b', q):
+                return True
+        else:
+            if w in q:
+                return True
+    return False
+
+
+# Compiled regex patterns for sports betting market formats
+_SPORTS_PATTERNS = [
+    # Spread format: "Team Name (-2.5)" or "Team (+1.5)"
+    re.compile(r'\([+-]\d+\.5\)', re.IGNORECASE),
+    # "Team A vs Team B" or "Team A v Team B" (common match format)
+    re.compile(r'\b\w+\s+(?:vs\.?|v\.?)\s+\w+', re.IGNORECASE),
+    # "to win" as in "Team to win match/game/series"
+    re.compile(r'\bto\s+win\b.*\b(?:match|game|series|set|round|fight|bout)\b', re.IGNORECASE),
+    # "Will X win on YYYY-MM-DD?" — Polymarket sports match format
+    re.compile(r'will\s+.+\s+win\s+on\s+\d{4}-\d{2}-\d{2}', re.IGNORECASE),
+    # "FC", "AFC", "CFC", "SC", "CF", "AC" club suffixes (e.g. "Genoa CFC", "FC Porto")
+    re.compile(r'\b(?:FC|AFC|CFC|CF|AC|SC|SV|BVB|PSG|RB)\b'),
+    # "United", "City", "Rovers", "Wanderers" — common club name parts
+    re.compile(r'\b(?:United|Rovers|Wanderers|Athletic|Sporting|Dynamo|Real|Inter)\b(?!.*(?:states|nations|kingdom|airlines))', re.IGNORECASE),
+    # "O/U X.5" — over/under player props (e.g. "LeBron James: Rebounds O/U 5.5")
+    re.compile(r'\bO/U\s+\d+\.5\b', re.IGNORECASE),
+    # Player prop patterns: "Name: Stat O/U" or "Name: Stat Over/Under"
+    re.compile(r':\s*(?:points|rebounds|assists|strikeouts|hits|yards|tackles|sacks|goals|saves)\b', re.IGNORECASE),
+    # Common South American / European club prefixes
+    re.compile(r'\b(?:CA|CD|CF|CR|CS|FK|NK|SK|AS|SS|US)\s+[A-Z]', re.IGNORECASE),
+]
+
+
+def _is_sports_pattern(q: str) -> bool:
+    """Check regex patterns that indicate sports betting markets."""
+    return any(p.search(q) for p in _SPORTS_PATTERNS)
+
+
+def infer_category(question: str) -> str:
+    """Infer market category from question text."""
+    q = question.lower() if isinstance(question, str) else ""
+
+    if _word_match(q, [
+        # Sports / leagues
+        "tennis", "football", "soccer", "nba", "nfl", "nhl",
+        "mlb", "ufc", "mma", "boxing", "cricket", "f1",
+        "formula", "grand prix", "atp", "wta", "ncaa",
+        "premier league", "champions league", "la liga",
+        "bundesliga", "serie a", "ligue 1", "copa",
+        "super bowl", "world cup", "olympics",
+        "europa league", "mls", "liga mx", "eredivisie",
+        "primeira liga", "süper lig", "j-league", "k-league",
+        "afl", "nrl", "ipl", "pga", "lpga", "wwe",
+        "six nations", "rugby", "cycling", "tour de france",
+        "nascar", "indycar", "motogp",
+        # Betting market formats
+        "spread:", "moneyline", "over/under", "handicap",
+        "total goals", "total points", "total runs",
+        "total assists", "total rebounds", "total touchdowns",
+        "total strikeouts", "total aces", "total kills",
+        "total corners", "total cards", "total sets",
+        "winner:", "match winner", "game winner",
+        "clean sheet", "both teams to score",
+        "first to score", "last to score",
+        "half-time", "halftime", "full-time", "fulltime",
+        "1st half", "2nd half", "1st quarter", "1st set",
+        "home team", "away team", "home win", "away win",
+        # Competition stages
+        "semifinal", "semi-final", "quarterfinal", "quarter-final",
+        "round of 16", "group stage", "playoff", "play-off",
+        "wild card", "divisional round", "conference finals",
+        # Game actions
+        "touchdown", "home run", "strikeout", "three-pointer",
+        "hat trick", "hat-trick", "goal scorer",
+        "assists leader", "mvp award",
+    ]):
+        return "Sports"
+
+    # Regex patterns for sports betting formats (use original case for club suffixes)
+    if _is_sports_pattern(question if isinstance(question, str) else ""):
+        return "Sports"
+
+    if _word_match(q, [
+        "dota", "counter-strike", "cs2", "csgo", "league of legends",
+        "lol", "valorant", "esport",
+    ]):
+        return "Esports"
+
+    if _word_match(q, [
+        "bitcoin", "btc", "ethereum", "eth", "crypto",
+        "xrp", "solana", "sol", "dogecoin", "doge",
+    ]):
+        return "Crypto"
+
+    if _word_match(q, [
+        "trump", "biden", "election", "congress", "senate",
+        "president", "democrat", "republican", "political",
+        "governor", "mayor", "vote", "poll", "legislation",
+        "executive order",
+    ]):
+        return "Politics"
+
+    if _word_match(q, [
+        "stock", "s&p", "nasdaq", "dow jones", "fed",
+        "interest rate", "inflation", "gdp", "unemployment",
+        "earnings", "revenue", "ipo", "market cap",
+    ]):
+        return "Economics/Finance"
+
+    if _word_match(q, [
+        "oscar", "grammy", "emmy", "movie", "album",
+        "celebrity", "taylor swift", "kanye", "elon musk",
+        "twitter", "tiktok", "youtube",
+    ]):
+        return "Entertainment"
+
+    if _word_match(q, [
+        "weather", "temperature", "hurricane", "earthquake",
+        "climate", "nasa", "spacex", "launch",
+    ]):
+        return "Science/Weather"
+
+    return "Other"
+
+
+def parse_json_field(value, default=None):
+    """Safely parse a JSON string field from API responses."""
+    if default is None:
+        default = []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return default
+    return default
+
+
+def get_winning_token(market: dict) -> tuple[int | None, str, str]:
+    """Extract winning token info from a resolved market.
+
+    Returns (winning_idx, winning_outcome, winning_token_id) or (None, "", "").
+    """
+    outcome_prices = parse_json_field(market.get("outcomePrices", "[]"))
+    outcomes = parse_json_field(market.get("outcomes", "[]"))
+    token_ids = parse_json_field(market.get("clobTokenIds", "[]"))
+
+    for i, price in enumerate(outcome_prices):
+        try:
+            if float(price) == 1.0:
+                outcome = outcomes[i] if i < len(outcomes) else "Unknown"
+                token_id = token_ids[i] if i < len(token_ids) else ""
+                return i, outcome, token_id
+        except (ValueError, TypeError):
+            continue
+
+    return None, "", ""
+
+
+def passes_all_filters(market: dict, blocked_categories: list[str],
+                       surprise_cutoff: float) -> tuple[bool, str]:
+    """Run all filters on a market. Returns (passed, reason_if_filtered)."""
+    question = market.get("question", "")
+
+    # 1. Category check (blocklist — block risky categories)
+    category = infer_category(question)
+    if category in blocked_categories:
+        return False, f"blocked_category={category}"
+
+    # 2. Crypto short-term fee markets
+    if is_crypto_short_term(question):
+        return False, "crypto_short_term_fees"
+
+    # 3. Surprise pricing filter
+    ltp = market.get("lastTradePrice")
+    if ltp is not None:
+        try:
+            if float(ltp) < surprise_cutoff:
+                return False, f"surprise_price={ltp}"
+        except (ValueError, TypeError):
+            pass
+
+    # 4. Must have order book enabled
+    if not market.get("enableOrderBook", True):
+        return False, "orderbook_disabled"
+
+    # 5. Must be resolved with a winning token
+    winning_idx, _, winning_token = get_winning_token(market)
+    if winning_idx is None or not winning_token:
+        return False, "not_resolved"
+
+    return True, ""
+
+
+# -----------------------------------------------------------------------
+# Enhanced scanner filters (data-analysis-driven)
+# -----------------------------------------------------------------------
+
+_SUBJECTIVE_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"\bsignificant(?:ly)?\b", r"\bsubstantial(?:ly)?\b", r"\bnotabl[ey]\b",
+        r"\bmajor\b", r"\bgenerally\b", r"\bmostly\b", r"\bwidely\b",
+        r"\baccepted\b", r"\bbest\b", r"\bworst\b",
+        r"\bsuccessful(?:ly)?\b", r"\bfamous\b", r"\bwell[- ]known\b",
+    ]
+]
+
+
+def has_subjective_language(question: str, description: str) -> bool:
+    """Return True if resolution criteria contain subjective language.
+
+    Subjective criteria increase UMA dispute risk, which could result
+    in full position loss.
+    """
+    text = f"{question} {description}"
+    return any(p.search(text) for p in _SUBJECTIVE_PATTERNS)
+
+
+def check_end_date_timing(end_date_str: str, grace_minutes: int) -> tuple[bool, str]:
+    """Check if enough time has passed since end_date.
+
+    Returns (passes, reason). Fails if end_date was less than grace_minutes ago.
+    The UMA oracle has a 2-hour challenge period — we require at least 30 minutes
+    to have passed before considering entry.
+    """
+    if not end_date_str:
+        return False, "missing_end_date"
+    try:
+        end_dt = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+        # Ensure timezone-aware (naive dates assumed UTC)
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        elapsed_minutes = (now - end_dt).total_seconds() / 60
+        if elapsed_minutes < grace_minutes:
+            return False, f"too_soon={elapsed_minutes:.1f}min"
+        return True, ""
+    except (ValueError, TypeError):
+        return False, "invalid_end_date"
+
+
+def was_below_threshold_pre_close(
+    history: list[dict],
+    end_date_str: str,
+    window_hours: int,
+    cutoff: float,
+) -> bool:
+    """Return True if price dropped below cutoff in the window before end_date.
+
+    This catches "surprise wins" — markets where there was genuine uncertainty
+    near the close. 33% of markets in our analysis had prices below $0.50 near
+    close, indicating these aren't safe settlement-lag plays.
+
+    Args:
+        history: Price history from CLOB API [{"t": unix_ts, "p": price}].
+        end_date_str: ISO format end date string.
+        window_hours: How far back to look (default 2 hours).
+        cutoff: Price threshold (default $0.50).
+    """
+    if not history or not end_date_str:
+        return False
+    try:
+        end_dt = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+
+    window_start_ts = (end_dt - timedelta(hours=window_hours)).timestamp()
+    end_ts = end_dt.timestamp()
+
+    for point in history:
+        t = point.get("t", 0)
+        p = point.get("p", 1.0)
+        if window_start_ts <= t <= end_ts:
+            try:
+                if float(p) < cutoff:
+                    return True
+            except (ValueError, TypeError):
+                continue
+    return False
+
+
+def check_liquidity_at_threshold(
+    asks: list[dict],
+    threshold: float,
+    min_usdc: float,
+) -> tuple[float, bool]:
+    """Check USDC value of asks available at or below the threshold price.
+
+    Returns (available_usdc, passes_minimum).
+    Uses price * size for USDC cost, not raw share count.
+    """
+    total_usdc = 0.0
+    for ask in asks:
+        try:
+            price = float(ask.get("price", 1.0))
+            size = float(ask.get("size", 0.0))
+            if price <= threshold:
+                total_usdc += price * size
+        except (ValueError, TypeError):
+            continue
+    return total_usdc, total_usdc >= min_usdc
+
+
+# Category settlement speed scores (from analysis data)
+_CATEGORY_SCORE = {
+    "Crypto": 1.0,    # 3.02h median settlement — best for capital velocity
+    "Esports": 0.8,   # 1.97h median settlement — fastest but lower volume
+}
+
+
+def score_opportunity(
+    category: str,
+    liquidity_usdc: float,
+    minutes_since_end: float,
+) -> float:
+    """Score opportunity 0.0–10.0. Higher = more attractive.
+
+    Components:
+      - Category base (0–4): Crypto=4.0, Esports=3.2 (based on settlement speed)
+      - Liquidity score (0–4): log2(usdc/10), capped at 4.0
+      - Time score (0–2): optimal window is 30min–24h after end_date
+    """
+    cat_score = _CATEGORY_SCORE.get(category, 0.5) * 4.0
+
+    # Liquidity: log2(usdc/10), capped at 4
+    liq_score = min(4.0, math.log2(max(1.0, liquidity_usdc / 10.0)))
+
+    # Time: reward the sweet spot, penalize very fresh or very stale
+    hours = minutes_since_end / 60.0
+    if hours < 0.5:
+        time_score = 0.0
+    elif hours <= 24.0:
+        time_score = 2.0
+    elif hours <= 48.0:
+        time_score = 1.0
+    else:
+        time_score = 0.5
+
+    return round(cat_score + liq_score + time_score, 2)
