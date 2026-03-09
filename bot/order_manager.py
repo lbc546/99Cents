@@ -315,14 +315,21 @@ class OrderManager:
             cap = min(cap, self._wallet_balance - self.total_deployed)
         return max(cap, 0)
 
-    def _has_position_in_market(self, market_id: str) -> bool:
+    def _has_position_in_market(self, market_id: str, condition_id: str = "",
+                                token_id: str = "") -> bool:
         # Block re-buying if ANY position exists for this market,
         # regardless of status (pending, filled, cancelled, redeemed).
-        # This prevents duplicate buying on restart when positions get cancelled.
-        return any(
-            p.market_id == market_id
-            for p in self.positions.values()
-        )
+        # Check market_id, condition_id, AND token_id to catch duplicates
+        # across different ID schemes (Gamma numeric vs CLOB 0x condition_id).
+        for p in self.positions.values():
+            if p.market_id == market_id:
+                return True
+            if condition_id and (p.condition_id == condition_id
+                                 or p.market_id == condition_id):
+                return True
+            if token_id and p.token_id == token_id:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Profitability calculation
@@ -403,8 +410,9 @@ class OrderManager:
                            "market_cooldown_60s")
             return
 
-        # 2b. Duplicate market check
-        if self._has_position_in_market(market_id):
+        # 2b. Duplicate market check (cross-references condition_id and token_id
+        # to catch duplicates across Gamma numeric IDs and CLOB 0x condition IDs)
+        if self._has_position_in_market(market_id, condition_id, token_id):
             self._log_skip(market_id, token_id, question, category,
                            "duplicate_market")
             return
