@@ -253,13 +253,13 @@ class Redeemer:
             payout = await asyncio.to_thread(
                 self._contract.functions.payoutNumerators(cond_bytes32, 0).call
             )
+            logger.info("payoutNumerators(%s, 0) = %s", pos.condition_id[:18], payout)
             if payout > 0:
                 return True
-            logger.debug("Condition %s not resolved on-chain yet, skipping redemption",
-                         pos.condition_id[:18])
             return False
-        except Exception:
-            logger.debug("On-chain resolution check failed for %s", pos.condition_id[:18])
+        except Exception as e:
+            logger.warning("On-chain resolution check failed for %s: %s",
+                           pos.condition_id[:18], e)
             return False
 
     async def _is_market_resolved(self, pos) -> bool:
