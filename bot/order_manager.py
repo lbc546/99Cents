@@ -190,7 +190,7 @@ class OrderManager:
                 pos = Position(
                     market_id=market_id,
                     token_id=info["token_id"],
-                    condition_id="",  # will be filled by settlement tracker
+                    condition_id=market_id if market_id.startswith("0x") else "",
                     question=f"[synced from CLOB] market {market_id}",
                     category="",
                     order_id=info["order_id"],
@@ -275,6 +275,9 @@ class OrderManager:
             with open(self.POSITIONS_FILE, "r") as f:
                 data = json.load(f)
             for order_id, fields in data.items():
+                # Backfill condition_id for CLOB-synced positions
+                if not fields.get("condition_id") and fields.get("market_id", "").startswith("0x"):
+                    fields["condition_id"] = fields["market_id"]
                 self.positions[order_id] = Position(**fields)
             active = sum(1 for p in self.positions.values() if p.status in ("pending", "filled"))
             logger.info("Loaded %d positions from disk (%d active)", len(self.positions), active)

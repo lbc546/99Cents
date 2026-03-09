@@ -424,7 +424,7 @@ class SettlementTracker:
                         bids = book.get("bids", [])
                         if bids:
                             best_bid = float(bids[0].get("price", 0))
-                            if best_bid <= 0:
+                            if best_bid < 0.02:
                                 continue  # Book torn down post-resolution, not a real drop
                             drop = pos.price - best_bid
                             if drop > self.config.price_movement_alert_threshold:
