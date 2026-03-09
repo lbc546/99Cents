@@ -282,9 +282,8 @@ class MarketMonitor:
 
             for market in markets:
                 market_id = market.get("id", "")
-                if market_id in self._seen_market_ids:
-                    continue
-                self._seen_market_ids.add(market_id)
+                # Don't add to _seen_market_ids — upcoming markets should be
+                # re-evaluated each cycle as prices change near resolution.
 
                 question = market.get("question", "")
                 category = infer_category(question)
@@ -338,9 +337,9 @@ class MarketMonitor:
                     break
 
                 market_id = market.get("id", "")
-                if market_id in self._seen_market_ids:
-                    continue
-                self._seen_market_ids.add(market_id)
+                # Don't add to _seen_market_ids — resolved markets should be
+                # re-evaluated each cycle as liquidity can appear after first check.
+                # The _last_poll_time cutoff prevents re-processing old markets.
 
                 question = market.get("question", "")
                 category = infer_category(question)
