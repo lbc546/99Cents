@@ -805,24 +805,31 @@ class MarketMonitor:
 
         # Step 5: End date timing — category-aware grace period [FREE]
         # gamma_closed: skip timing (oracle already resolved).
+        # gamma_upcoming weather: endDate < 4hr (afternoon peak likely passed).
         # gamma_upcoming non-weather: endDate < 1hr AND confidence >= 0.99.
-        # gamma_upcoming weather: bypass timing (temp recorded before endDate).
-        if source == "gamma_upcoming" and category != "Science/Weather":
-            # Must be within 1 hour of endDate
+        if source == "gamma_upcoming":
             try:
                 end_dt = datetime.fromisoformat(
                     end_date.replace("Z", "+00:00")) if end_date else None
                 if end_dt:
-                    mins_to_end = (end_dt - datetime.now(
-                        timezone.utc)).total_seconds() / 60
-                    if mins_to_end > 60:
-                        self._log_filtered(market_id, question, category, source,
-                                           "upcoming_too_early=%.0fmin" % mins_to_end)
-                        return
+                    hours_to_end = (end_dt - datetime.now(
+                        timezone.utc)).total_seconds() / 3600
+                    if category == "Science/Weather":
+                        # Weather: allow if endDate within 4 hours
+                        if hours_to_end > 4:
+                            self._log_filtered(market_id, question, category, source,
+                                               "weather_too_early=%.1fh" % hours_to_end)
+                            return
+                    else:
+                        # Non-weather: endDate within 1 hour
+                        if hours_to_end > 1:
+                            self._log_filtered(market_id, question, category, source,
+                                               "upcoming_too_early=%.0fmin" % (hours_to_end * 60))
+                            return
             except (ValueError, TypeError):
                 pass
-            # Must have >= 0.99 confidence (best_price checked in Step 3)
-            if best_price < 0.99:
+            # Non-weather also requires >= 0.99 confidence
+            if category != "Science/Weather" and best_price < 0.99:
                 self._log_filtered(market_id, question, category, source,
                                    "upcoming_low_confidence=%.2f" % best_price)
                 return
