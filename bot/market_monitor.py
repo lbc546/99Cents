@@ -743,10 +743,14 @@ class MarketMonitor:
                                f"category={category}")
             return
 
-        # Step 2: Crypto short-term fee adjustment [FREE]
-        # 5min/15min crypto markets have ~1.56% taker fee.
-        # Use a lower price threshold ($0.98) to preserve margin.
+        # Step 2: Crypto filter [FREE]
+        # Block long-term crypto (daily/weekly) — too volatile before close.
+        # Only allow short-term (5min/15min) crypto through.
         _is_crypto_st = is_crypto_short_term(question)
+        if category == "Crypto" and not _is_crypto_st:
+            self._log_filtered(market_id, question, category, source,
+                               "crypto_long_term")
+            return
         effective_threshold = (self.config.crypto_short_term_price_threshold
                                if _is_crypto_st else self.config.price_threshold)
 
