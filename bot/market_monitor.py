@@ -755,8 +755,10 @@ class MarketMonitor:
                                if _is_crypto_st else self.config.price_threshold)
 
         # Step 3: Resolution / high-confidence check [FREE]
+        best_price = 1.0  # Track leading price for Step 5 upcoming filter
         winning_idx, winning_outcome, winning_token = get_winning_token(market)
         if winning_idx is None or not winning_token:
+            best_price = 0.0
             # Not officially resolved — check for high-confidence leading outcome.
             # This catches the pre-resolution window where the CLOB book is still
             # active but the outcome is effectively decided (price >= 0.95).
@@ -802,10 +804,28 @@ class MarketMonitor:
             return
 
         # Step 5: End date timing — category-aware grace period [FREE]
-        # Sports/Esports endDate = game START time, so we need 3-3.5h grace
-        # to ensure the game has actually finished before we buy.
-        # Skip for gamma_closed (oracle already resolved — event definitely happened)
-        # and gamma_upcoming (pre-positioning for imminent markets).
+        # gamma_closed: skip timing (oracle already resolved).
+        # gamma_upcoming non-weather: endDate < 1hr AND confidence >= 0.99.
+        # gamma_upcoming weather: bypass timing (temp recorded before endDate).
+        if source == "gamma_upcoming" and category != "Science/Weather":
+            # Must be within 1 hour of endDate
+            try:
+                end_dt = datetime.fromisoformat(
+                    end_date.replace("Z", "+00:00")) if end_date else None
+                if end_dt:
+                    mins_to_end = (end_dt - datetime.now(
+                        timezone.utc)).total_seconds() / 60
+                    if mins_to_end > 60:
+                        self._log_filtered(market_id, question, category, source,
+                                           "upcoming_too_early=%.0fmin" % mins_to_end)
+                        return
+            except (ValueError, TypeError):
+                pass
+            # Must have >= 0.99 confidence (best_price checked in Step 3)
+            if best_price < 0.99:
+                self._log_filtered(market_id, question, category, source,
+                                   "upcoming_low_confidence=%.2f" % best_price)
+                return
         if source not in ("gamma_closed", "gamma_upcoming"):
             grace = self.config.end_date_grace_by_category.get(
                 category, self.config.end_date_grace_minutes
