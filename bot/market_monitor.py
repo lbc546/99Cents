@@ -185,14 +185,16 @@ class MarketMonitor:
 
         while True:
             try:
-                await self._poll_gamma_active()
-                await self._poll_gamma_upcoming()
-                await self._poll_gamma_closed()
+                a = await self._poll_gamma_active()
+                u = await self._poll_gamma_upcoming()
+                c = await self._poll_gamma_closed()
+                logger.info("Gamma poll cycle: active=%d upcoming=%d closed=%d watchlist=%d seen=%d",
+                            a, u, c, len(self._watchlist), len(self._seen_market_ids))
             except Exception:
                 logger.exception("Gamma poll error")
             await asyncio.sleep(self.config.polling_interval_seconds)
 
-    async def _poll_gamma_active(self):
+    async def _poll_gamma_active(self) -> int:
         """Fetch active (not-yet-closed) markets with past endDate.
 
         This is the PRIMARY source of opportunities: events have concluded
@@ -203,6 +205,7 @@ class MarketMonitor:
         offset = 0
         pages_fetched = 0
         new_count = 0
+        total_fetched = 0
 
         # Window: endDate between 48h ago and now (past-endDate active markets)
         now = datetime.now(timezone.utc)
@@ -223,6 +226,7 @@ class MarketMonitor:
             if not markets:
                 break
 
+            total_fetched += len(markets)
             for market in markets:
                 market_id = market.get("id", "")
                 if market_id in self._seen_market_ids:
@@ -247,8 +251,9 @@ class MarketMonitor:
         if new_count:
             logger.info("Gamma active poll: %d new pre-resolution markets (pages=%d)",
                          new_count, pages_fetched + 1)
+        return total_fetched
 
-    async def _poll_gamma_upcoming(self):
+    async def _poll_gamma_upcoming(self) -> int:
         """Fetch markets closing in the next 12 hours.
 
         Catches weather/crypto markets where the outcome may already be known
@@ -261,6 +266,7 @@ class MarketMonitor:
         offset = 0
         pages_fetched = 0
         new_count = 0
+        total_fetched = 0
 
         now = datetime.now(timezone.utc)
         window_start = now.isoformat()
@@ -280,6 +286,7 @@ class MarketMonitor:
             if not markets:
                 break
 
+            total_fetched += len(markets)
             for market in markets:
                 market_id = market.get("id", "")
                 # Don't add to _seen_market_ids — upcoming markets should be
@@ -303,8 +310,9 @@ class MarketMonitor:
         if new_count:
             logger.info("Gamma upcoming poll: %d markets closing within 12h (pages=%d)",
                          new_count, pages_fetched + 1)
+        return total_fetched
 
-    async def _poll_gamma_closed(self):
+    async def _poll_gamma_closed(self) -> int:
         """Fetch recently closed markets (already resolved by oracle).
 
         Secondary source: catches markets that resolved while we weren't
@@ -314,6 +322,7 @@ class MarketMonitor:
         offset = 0
         pages_fetched = 0
         new_count = 0
+        total_fetched = 0
 
         while pages_fetched < self.config.gamma_poll_max_pages:
             params = {
@@ -328,6 +337,7 @@ class MarketMonitor:
             if not markets:
                 break
 
+            total_fetched += len(markets)
             hit_cutoff = False
             for market in markets:
                 closed_time = market.get("closedTime") or market.get("endDate") or ""
@@ -360,10 +370,7 @@ class MarketMonitor:
         if new_count:
             logger.info("Gamma closed poll: %d new resolved markets (pages=%d)",
                          new_count, pages_fetched + 1)
-
-        if new_count:
-            logger.info("Gamma poll: %d new target-category markets (pages=%d, watchlist=%d)",
-                         new_count, pages_fetched + 1, len(self._watchlist))
+        return total_fetched
 
     # ------------------------------------------------------------------
     # Task 2: WebSocket Listener
