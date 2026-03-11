@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
-import requests as sync_requests
 import websockets
 
 from bot.config import BotConfig
@@ -154,44 +153,52 @@ class MarketMonitor:
                         logger.exception("CLOB request failed: %s", url)
             return None
 
-    def _sync_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
-        """Synchronous Gamma GET — runs in a thread via asyncio.to_thread."""
-        logger.info("_sync_gamma_get entered (thread): %s", url.split("/")[-1])
-        for attempt in range(3):
-            try:
-                logger.info("_sync_gamma_get attempt %d: requesting...", attempt + 1)
-                resp = sync_requests.get(url, params=params, timeout=15)
-                logger.info("_sync_gamma_get got response: %d", resp.status_code)
-                if resp.status_code == 429:
-                    wait = (2 ** attempt) * 5
-                    logger.warning("Gamma 429 rate limited, waiting %ds", wait)
-                    time.sleep(wait)
-                    continue
-                if resp.status_code != 200:
-                    logger.warning("Gamma HTTP %d: %s", resp.status_code, url)
-                    return None
-                return resp.json()
-            except Exception as e:
-                logger.warning("Gamma request error (attempt %d): %s", attempt + 1, e)
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-                else:
-                    logger.exception("Gamma request failed: %s", url)
-        return None
-
     async def _rate_limited_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
-        """Rate-limited GET to Gamma API using sync requests in a thread."""
-        logger.info("_rate_limited: acquiring semaphore...")
+        """Rate-limited GET to Gamma API using subprocess curl as fallback."""
         async with self._gamma_sem:
-            logger.info("_rate_limited: semaphore acquired")
             elapsed = time.monotonic() - self._last_gamma_call
             if elapsed < self._gamma_min_interval:
                 await asyncio.sleep(self._gamma_min_interval - elapsed)
             self._last_gamma_call = time.monotonic()
-            logger.info("_rate_limited: dispatching to thread...")
-            result = await asyncio.to_thread(self._sync_gamma_get, url, params)
-            logger.info("_rate_limited: thread returned, result type=%s", type(result).__name__)
-            return result
+
+            # Build URL with query params
+            if params:
+                from urllib.parse import urlencode
+                full_url = f"{url}?{urlencode(params)}"
+            else:
+                full_url = url
+
+            for attempt in range(3):
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "curl", "-s", "--max-time", "15", full_url,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+                    if proc.returncode != 0:
+                        logger.warning("Gamma curl error (attempt %d): %s",
+                                       attempt + 1, stderr.decode().strip())
+                        if attempt < 2:
+                            await asyncio.sleep(2 ** attempt)
+                        continue
+                    data = json.loads(stdout.decode())
+                    return data
+                except asyncio.TimeoutError:
+                    logger.warning("Gamma curl timeout (attempt %d)", attempt + 1)
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    if attempt < 2:
+                        await asyncio.sleep(2 ** attempt)
+                except Exception as e:
+                    logger.warning("Gamma request error (attempt %d): %s", attempt + 1, e)
+                    if attempt < 2:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        logger.exception("Gamma request failed: %s", url)
+            return None
 
     # ------------------------------------------------------------------
     # Task 1: Gamma API Poller
