@@ -156,9 +156,12 @@ class MarketMonitor:
 
     def _sync_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
         """Synchronous Gamma GET — runs in a thread via asyncio.to_thread."""
+        logger.info("_sync_gamma_get entered (thread): %s", url.split("/")[-1])
         for attempt in range(3):
             try:
+                logger.info("_sync_gamma_get attempt %d: requesting...", attempt + 1)
                 resp = sync_requests.get(url, params=params, timeout=15)
+                logger.info("_sync_gamma_get got response: %d", resp.status_code)
                 if resp.status_code == 429:
                     wait = (2 ** attempt) * 5
                     logger.warning("Gamma 429 rate limited, waiting %ds", wait)
@@ -178,12 +181,17 @@ class MarketMonitor:
 
     async def _rate_limited_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
         """Rate-limited GET to Gamma API using sync requests in a thread."""
+        logger.info("_rate_limited: acquiring semaphore...")
         async with self._gamma_sem:
+            logger.info("_rate_limited: semaphore acquired")
             elapsed = time.monotonic() - self._last_gamma_call
             if elapsed < self._gamma_min_interval:
                 await asyncio.sleep(self._gamma_min_interval - elapsed)
             self._last_gamma_call = time.monotonic()
-            return await asyncio.to_thread(self._sync_gamma_get, url, params)
+            logger.info("_rate_limited: dispatching to thread...")
+            result = await asyncio.to_thread(self._sync_gamma_get, url, params)
+            logger.info("_rate_limited: thread returned, result type=%s", type(result).__name__)
+            return result
 
     # ------------------------------------------------------------------
     # Task 1: Gamma API Poller
