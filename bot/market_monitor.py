@@ -129,7 +129,8 @@ class MarketMonitor:
             for attempt in range(3):
                 try:
                     async with session.get(url, params=params,
-                                           timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                                           timeout=aiohttp.ClientTimeout(
+                                               total=15, sock_connect=5, sock_read=10)) as resp:
                         self._last_clob_call = time.monotonic()
                         if resp.status == 429:
                             wait = (2 ** attempt) * 5
@@ -139,7 +140,7 @@ class MarketMonitor:
                         if resp.status != 200:
                             return None
                         return await resp.json()
-                except (aiohttp.ClientError, asyncio.TimeoutError):
+                except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError):
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
                     else:
@@ -159,7 +160,8 @@ class MarketMonitor:
                 try:
                     logger.info("Gamma GET attempt %d: %s", attempt + 1, url.split("/")[-1])
                     async with session.get(url, params=params,
-                                           timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                                           timeout=aiohttp.ClientTimeout(
+                                               total=15, sock_connect=5, sock_read=10)) as resp:
                         self._last_gamma_call = time.monotonic()
                         if resp.status == 429:
                             wait = (2 ** attempt) * 5
@@ -170,7 +172,7 @@ class MarketMonitor:
                             logger.warning("Gamma HTTP %d: %s", resp.status, url)
                             return None
                         return await resp.json()
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
                     logger.warning("Gamma request error (attempt %d): %s", attempt + 1, e)
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
