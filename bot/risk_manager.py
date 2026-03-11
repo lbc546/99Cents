@@ -42,7 +42,7 @@ class RiskManager:
 
     def __init__(self, config: BotConfig, blacklist_path: str = "data/blacklist.json"):
         self.config = config
-        self._blacklist_path = os.path.abspath(blacklist_path)
+        self._blacklist_path = blacklist_path
         self._blacklist: dict[str, dict] = {}
 
         # Circuit breaker state
@@ -121,11 +121,13 @@ class RiskManager:
             logger.exception("Failed to save blacklist")
 
     def _save_blacklist_sync(self) -> None:
-        """Write blacklist to disk."""
+        """Synchronous atomic write."""
         data = {"markets": dict(self._blacklist)}
+        tmp_path = self._blacklist_path + ".tmp"
         os.makedirs(os.path.dirname(self._blacklist_path) or ".", exist_ok=True)
-        with open(self._blacklist_path, "w") as f:
+        with open(tmp_path, "w") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_path, self._blacklist_path)
 
     def _clean_expired(self) -> None:
         """Remove expired blacklist entries in-place."""
