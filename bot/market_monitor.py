@@ -211,6 +211,11 @@ class MarketMonitor:
         while True:
             try:
                 logger.info("Gamma poll starting...")
+                # Debug: test if event loop is responsive
+                logger.info("Gamma: testing executor...")
+                test_result = await asyncio.get_event_loop().run_in_executor(
+                    self._gamma_pool, lambda: "executor_ok")
+                logger.info("Gamma: executor test=%s", test_result)
                 a = await self._poll_gamma_active()
                 logger.info("Gamma active done: %d", a)
                 u = await self._poll_gamma_upcoming()
