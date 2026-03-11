@@ -121,13 +121,11 @@ class RiskManager:
             logger.exception("Failed to save blacklist")
 
     def _save_blacklist_sync(self) -> None:
-        """Synchronous atomic write."""
+        """Write blacklist to disk."""
         data = {"markets": dict(self._blacklist)}
-        tmp_path = self._blacklist_path + ".tmp"
         os.makedirs(os.path.dirname(self._blacklist_path) or ".", exist_ok=True)
-        with open(tmp_path, "w") as f:
+        with open(self._blacklist_path, "w") as f:
             json.dump(data, f, indent=2)
-        os.replace(tmp_path, self._blacklist_path)
 
     def _clean_expired(self) -> None:
         """Remove expired blacklist entries in-place."""
