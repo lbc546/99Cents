@@ -35,6 +35,7 @@ from bot.filters import (
     has_subjective_language,
     infer_category,
     is_crypto_short_term,
+    is_live_event_market,
     parse_json_field,
     score_opportunity,
     was_below_threshold_pre_close,
@@ -797,10 +798,16 @@ class MarketMonitor:
                 self._log_filtered(market_id, question, category, source, reason)
                 return
 
-        # Step 4: Subjective language [FREE]
+        # Step 4a: Subjective language [FREE]
         if has_subjective_language(question, description):
             self._log_filtered(market_id, question, category, source,
                                "subjective_language")
+            return
+
+        # Step 4b: Live-event behavior markets [FREE]
+        if is_live_event_market(question):
+            self._log_filtered(market_id, question, category, source,
+                               "live_event_market")
             return
 
         # Step 5: End date timing — category-aware grace period [FREE]

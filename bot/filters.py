@@ -256,6 +256,34 @@ _SUBJECTIVE_PATTERNS = [
     ]
 ]
 
+# Live-event behavior markets: outcome unknown until event happens in real-time.
+# E.g. "Will Trump say X during speech", "Will player score Y in game"
+_LIVE_EVENT_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"\bsay\b.+\bduring\b",        # "Will X say ... during ..."
+        r"\bmention\b.+\bduring\b",     # "Will X mention ... during ..."
+        r"\bwear\b.+\bduring\b",        # "Will X wear ... during ..."
+        r"\b\d+\s*times?\b.+\bduring\b",  # "... 15 times during ..."
+        r"\bduring\b.+\bspeech\b",      # "during ... speech"
+        r"\bduring\b.+\bvisit\b",       # "during ... visit"
+        r"\bduring\b.+\binterview\b",   # "during ... interview"
+        r"\bduring\b.+\bpress\s*conference\b",
+        r"\bduring\b.+\baddress\b",
+        r"\bduring\b.+\brally\b",
+    ]
+]
+
+
+def is_live_event_market(question: str) -> bool:
+    """Return True if the question describes a live-event behavior market.
+
+    These markets resolve based on real-time events (speeches, visits, etc.)
+    where the outcome is unknowable until the event occurs — similar risk
+    to sports betting despite being categorized as Politics.
+    """
+    return any(p.search(question) for p in _LIVE_EVENT_PATTERNS)
+
 
 def has_subjective_language(question: str, description: str) -> bool:
     """Return True if resolution criteria contain subjective language.
