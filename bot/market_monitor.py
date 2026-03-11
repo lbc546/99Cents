@@ -24,9 +24,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-import concurrent.futures
-import subprocess
-
 import aiohttp
 import websockets
 
@@ -99,23 +96,17 @@ class MarketMonitor:
         self._session: aiohttp.ClientSession | None = None
 
         # Rate limiters — semaphore + min interval
-        self._clob_sem = asyncio.Semaphore(3)
+        self._clob_sem = asyncio.Semaphore(1)
         self._clob_min_interval = 60.0 / config.clob_rate_limit_per_min
         self._last_clob_call: float = 0.0
 
-        self._gamma_sem = asyncio.Semaphore(3)
+        self._gamma_sem = asyncio.Semaphore(1)
         self._gamma_min_interval = 60.0 / config.gamma_rate_limit_per_min
         self._last_gamma_call: float = 0.0
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(
-                limit=20,
-                ttl_dns_cache=300,
-                use_dns_cache=True,
-                resolver=aiohttp.resolver.ThreadedResolver(),
-            )
-            self._session = aiohttp.ClientSession(connector=connector)
+            self._session = aiohttp.ClientSession()
         return self._session
 
     async def close(self):
@@ -138,8 +129,7 @@ class MarketMonitor:
             for attempt in range(3):
                 try:
                     async with session.get(url, params=params,
-                                           timeout=aiohttp.ClientTimeout(
-                                               total=15, sock_connect=5, sock_read=10)) as resp:
+                                           timeout=aiohttp.ClientTimeout(total=20)) as resp:
                         self._last_clob_call = time.monotonic()
                         if resp.status == 429:
                             wait = (2 ** attempt) * 5
@@ -149,55 +139,40 @@ class MarketMonitor:
                         if resp.status != 200:
                             return None
                         return await resp.json()
-                except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError):
+                except (aiohttp.ClientError, asyncio.TimeoutError):
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
                     else:
                         logger.exception("CLOB request failed: %s", url)
             return None
 
-    # Dedicated thread pool for Gamma HTTP calls — avoids event loop blocking
-    _gamma_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="gamma")
-
-    @staticmethod
-    def _curl_get(url: str, params: dict | None = None) -> dict | list | None:
-        """Run curl via subprocess.run (blocking) — called from thread pool."""
-        from urllib.parse import urlencode
-        full_url = f"{url}?{urlencode(params)}" if params else url
-        for attempt in range(3):
-            try:
-                result = subprocess.run(
-                    ["curl", "-s", "--max-time", "15", full_url],
-                    capture_output=True, timeout=20,
-                )
-                if result.returncode != 0:
-                    logger.warning("Gamma curl error (attempt %d): %s",
-                                   attempt + 1, result.stderr.decode().strip())
-                    if attempt < 2:
-                        time.sleep(2 ** attempt)
-                    continue
-                return json.loads(result.stdout.decode())
-            except subprocess.TimeoutExpired:
-                logger.warning("Gamma curl timeout (attempt %d)", attempt + 1)
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-            except Exception as e:
-                logger.warning("Gamma request error (attempt %d): %s", attempt + 1, e)
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-                else:
-                    logger.exception("Gamma request failed: %s", url)
-        return None
-
     async def _rate_limited_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
-        """Rate-limited GET to Gamma API — runs curl in a dedicated thread pool."""
+        """Rate-limited GET to Gamma API with retry on 429."""
         async with self._gamma_sem:
             elapsed = time.monotonic() - self._last_gamma_call
             if elapsed < self._gamma_min_interval:
                 await asyncio.sleep(self._gamma_min_interval - elapsed)
-            self._last_gamma_call = time.monotonic()
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(self._gamma_pool, self._curl_get, url, params)
+
+            session = await self._get_session()
+            for attempt in range(3):
+                try:
+                    async with session.get(url, params=params,
+                                           timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                        self._last_gamma_call = time.monotonic()
+                        if resp.status == 429:
+                            wait = (2 ** attempt) * 5
+                            logger.warning("Gamma 429 rate limited, waiting %ds", wait)
+                            await asyncio.sleep(wait)
+                            continue
+                        if resp.status != 200:
+                            return None
+                        return await resp.json()
+                except (aiohttp.ClientError, asyncio.TimeoutError):
+                    if attempt < 2:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        logger.exception("Gamma request failed: %s", url)
+            return None
 
     # ------------------------------------------------------------------
     # Task 1: Gamma API Poller
@@ -210,19 +185,14 @@ class MarketMonitor:
 
         while True:
             try:
-                logger.info("Gamma poll starting...")
-                a = await self._poll_gamma_active()
-                logger.info("Gamma active done: %d", a)
-                u = await self._poll_gamma_upcoming()
-                logger.info("Gamma upcoming done: %d", u)
-                c = await self._poll_gamma_closed()
-                logger.info("Gamma poll cycle: active=%d upcoming=%d closed=%d watchlist=%d seen=%d",
-                            a, u, c, len(self._watchlist), len(self._seen_market_ids))
+                await self._poll_gamma_active()
+                await self._poll_gamma_upcoming()
+                await self._poll_gamma_closed()
             except Exception:
                 logger.exception("Gamma poll error")
             await asyncio.sleep(self.config.polling_interval_seconds)
 
-    async def _poll_gamma_active(self) -> int:
+    async def _poll_gamma_active(self):
         """Fetch active (not-yet-closed) markets with past endDate.
 
         This is the PRIMARY source of opportunities: events have concluded
@@ -233,7 +203,6 @@ class MarketMonitor:
         offset = 0
         pages_fetched = 0
         new_count = 0
-        total_fetched = 0
 
         # Window: endDate between 48h ago and now (past-endDate active markets)
         now = datetime.now(timezone.utc)
@@ -254,7 +223,6 @@ class MarketMonitor:
             if not markets:
                 break
 
-            total_fetched += len(markets)
             for market in markets:
                 market_id = market.get("id", "")
                 if market_id in self._seen_market_ids:
@@ -279,9 +247,8 @@ class MarketMonitor:
         if new_count:
             logger.info("Gamma active poll: %d new pre-resolution markets (pages=%d)",
                          new_count, pages_fetched + 1)
-        return total_fetched
 
-    async def _poll_gamma_upcoming(self) -> int:
+    async def _poll_gamma_upcoming(self):
         """Fetch markets closing in the next 12 hours.
 
         Catches weather/crypto markets where the outcome may already be known
@@ -294,7 +261,6 @@ class MarketMonitor:
         offset = 0
         pages_fetched = 0
         new_count = 0
-        total_fetched = 0
 
         now = datetime.now(timezone.utc)
         window_start = now.isoformat()
@@ -314,7 +280,6 @@ class MarketMonitor:
             if not markets:
                 break
 
-            total_fetched += len(markets)
             for market in markets:
                 market_id = market.get("id", "")
                 # Don't add to _seen_market_ids — upcoming markets should be
@@ -338,9 +303,8 @@ class MarketMonitor:
         if new_count:
             logger.info("Gamma upcoming poll: %d markets closing within 12h (pages=%d)",
                          new_count, pages_fetched + 1)
-        return total_fetched
 
-    async def _poll_gamma_closed(self) -> int:
+    async def _poll_gamma_closed(self):
         """Fetch recently closed markets (already resolved by oracle).
 
         Secondary source: catches markets that resolved while we weren't
@@ -350,7 +314,6 @@ class MarketMonitor:
         offset = 0
         pages_fetched = 0
         new_count = 0
-        total_fetched = 0
 
         while pages_fetched < self.config.gamma_poll_max_pages:
             params = {
@@ -365,7 +328,6 @@ class MarketMonitor:
             if not markets:
                 break
 
-            total_fetched += len(markets)
             hit_cutoff = False
             for market in markets:
                 closed_time = market.get("closedTime") or market.get("endDate") or ""
@@ -398,7 +360,10 @@ class MarketMonitor:
         if new_count:
             logger.info("Gamma closed poll: %d new resolved markets (pages=%d)",
                          new_count, pages_fetched + 1)
-        return total_fetched
+
+        if new_count:
+            logger.info("Gamma poll: %d new target-category markets (pages=%d, watchlist=%d)",
+                         new_count, pages_fetched + 1, len(self._watchlist))
 
     # ------------------------------------------------------------------
     # Task 2: WebSocket Listener
