@@ -39,11 +39,9 @@ class Dashboard:
     async def run_dashboard(self):
         """Async task: refresh dashboard in a loop using rich Live."""
         import sys
-
-        # Skip dashboard when not running in an interactive terminal (e.g. systemd)
         if not sys.stdout.isatty():
             logger.info("Dashboard disabled (no TTY)")
-            await asyncio.Event().wait()  # block forever without consuming resources
+            await asyncio.Event().wait()
             return
 
         from rich.live import Live
