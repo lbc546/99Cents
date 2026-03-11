@@ -106,7 +106,13 @@ class MarketMonitor:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(
+                limit=20,
+                ttl_dns_cache=300,
+                use_dns_cache=True,
+                resolver=aiohttp.resolver.ThreadedResolver(),
+            )
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
 
     async def close(self):
