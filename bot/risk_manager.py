@@ -42,7 +42,7 @@ class RiskManager:
 
     def __init__(self, config: BotConfig, blacklist_path: str = "data/blacklist.json"):
         self.config = config
-        self._blacklist_path = blacklist_path
+        self._blacklist_path = os.path.abspath(blacklist_path)
         self._blacklist: dict[str, dict] = {}
 
         # Circuit breaker state
