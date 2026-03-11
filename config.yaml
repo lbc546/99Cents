@@ -3,7 +3,7 @@
 
 # --- Trading Parameters ---
 price_threshold: 0.99              # Max price to pay for winning shares
-max_position_per_market: 100       # Max USDC per single market
+max_position_per_market: 50       # Max USDC per single market
 max_total_deployed: 1000            # Max USDC deployed across all positions
 max_open_positions: 20             # Max concurrent open positions
 min_liquidity_usdc: 20             # Min USDC of liquidity available at threshold price
@@ -16,7 +16,7 @@ capital_floor: 0                   # Stop trading if Polymarket balance drops be
 # Entertainment BLOCKED: endDate semantics too inconsistent.
 # Everything else (Politics, Crypto, Weather, etc.) passes through —
 #   price/liquidity/resolution filters handle the rest.
-blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto"]
+blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto", "Science/Weather"]
 surprise_price_cutoff: 0.50        # Filter markets that traded below this near close
 high_confidence_threshold: 0.98    # Pre-resolution: accept leading outcome >= this price
 
