@@ -7,7 +7,7 @@ max_position_per_market: 100       # Max USDC per single market
 max_total_deployed: 1000            # Max USDC deployed across all positions
 max_open_positions: 20             # Max concurrent open positions
 min_liquidity_usdc: 20             # Min USDC of liquidity available at threshold price
-capital_floor: 100                 # Stop trading if Polymarket balance drops below this (minimum reserve)
+capital_floor: 0                   # Stop trading if Polymarket balance drops below this (minimum reserve)
 
 # --- Market Filtering ---
 # Blocklist approach: block risky categories, allow everything else.

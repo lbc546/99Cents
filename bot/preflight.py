@@ -174,11 +174,11 @@ async def _check_wallet_balance(config: BotConfig) -> str:
     raw_balance = float(balance_resp.get("balance", 0))
     balance = raw_balance / 1e6  # USDC has 6 decimals
 
-    if balance < config.capital_floor:
-        raise PreflightError(
-            "Polymarket balance $%.2f below floor $%.0f" % (balance, config.capital_floor))
+    if config.capital_floor and balance < config.capital_floor:
+        logger.warning("Polymarket balance $%.2f below floor $%.0f — will skip trades at runtime",
+                        balance, config.capital_floor)
 
-    return "$%.2f on Polymarket (floor=$%.0f)" % (balance, config.capital_floor)
+    return "$%.2f on Polymarket" % balance
 
 
 async def _check_active_markets(config: BotConfig) -> str:
