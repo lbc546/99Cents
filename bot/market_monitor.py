@@ -96,11 +96,11 @@ class MarketMonitor:
         self._session: aiohttp.ClientSession | None = None
 
         # Rate limiters — semaphore + min interval
-        self._clob_sem = asyncio.Semaphore(1)
+        self._clob_sem = asyncio.Semaphore(3)
         self._clob_min_interval = 60.0 / config.clob_rate_limit_per_min
         self._last_clob_call: float = 0.0
 
-        self._gamma_sem = asyncio.Semaphore(1)
+        self._gamma_sem = asyncio.Semaphore(3)
         self._gamma_min_interval = 60.0 / config.gamma_rate_limit_per_min
         self._last_gamma_call: float = 0.0
 
