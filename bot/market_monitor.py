@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
+import requests as sync_requests
 import websockets
 
 from bot.config import BotConfig
@@ -153,38 +154,36 @@ class MarketMonitor:
                         logger.exception("CLOB request failed: %s", url)
             return None
 
+    def _sync_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
+        """Synchronous Gamma GET — runs in a thread via asyncio.to_thread."""
+        for attempt in range(3):
+            try:
+                resp = sync_requests.get(url, params=params, timeout=15)
+                if resp.status_code == 429:
+                    wait = (2 ** attempt) * 5
+                    logger.warning("Gamma 429 rate limited, waiting %ds", wait)
+                    time.sleep(wait)
+                    continue
+                if resp.status_code != 200:
+                    logger.warning("Gamma HTTP %d: %s", resp.status_code, url)
+                    return None
+                return resp.json()
+            except Exception as e:
+                logger.warning("Gamma request error (attempt %d): %s", attempt + 1, e)
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                else:
+                    logger.exception("Gamma request failed: %s", url)
+        return None
+
     async def _rate_limited_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
-        """Rate-limited GET to Gamma API with retry on 429."""
-        logger.info("Gamma GET waiting for semaphore...")
+        """Rate-limited GET to Gamma API using sync requests in a thread."""
         async with self._gamma_sem:
             elapsed = time.monotonic() - self._last_gamma_call
             if elapsed < self._gamma_min_interval:
                 await asyncio.sleep(self._gamma_min_interval - elapsed)
-
-            session = await self._get_session()
-            for attempt in range(3):
-                try:
-                    logger.info("Gamma GET attempt %d: %s", attempt + 1, url.split("/")[-1])
-                    async with session.get(url, params=params,
-                                           timeout=aiohttp.ClientTimeout(
-                                               total=15, sock_connect=5, sock_read=10)) as resp:
-                        self._last_gamma_call = time.monotonic()
-                        if resp.status == 429:
-                            wait = (2 ** attempt) * 5
-                            logger.warning("Gamma 429 rate limited, waiting %ds", wait)
-                            await asyncio.sleep(wait)
-                            continue
-                        if resp.status != 200:
-                            logger.warning("Gamma HTTP %d: %s", resp.status, url)
-                            return None
-                        return await resp.json()
-                except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
-                    logger.warning("Gamma request error (attempt %d): %s", attempt + 1, e)
-                    if attempt < 2:
-                        await asyncio.sleep(2 ** attempt)
-                    else:
-                        logger.exception("Gamma request failed: %s", url)
-            return None
+            self._last_gamma_call = time.monotonic()
+            return await asyncio.to_thread(self._sync_gamma_get, url, params)
 
     # ------------------------------------------------------------------
     # Task 1: Gamma API Poller
