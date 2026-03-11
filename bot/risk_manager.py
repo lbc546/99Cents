@@ -42,6 +42,10 @@ class RiskManager:
 
     def __init__(self, config: BotConfig, blacklist_path: str = "data/blacklist.json"):
         self.config = config
+        # Resolve relative paths against project root (bot/../) for systemd compatibility
+        if not os.path.isabs(blacklist_path):
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            blacklist_path = os.path.join(project_root, blacklist_path)
         self._blacklist_path = blacklist_path
         self._blacklist: dict[str, dict] = {}
 
