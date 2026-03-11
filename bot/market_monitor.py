@@ -185,8 +185,11 @@ class MarketMonitor:
 
         while True:
             try:
+                logger.info("Gamma poll starting...")
                 a = await self._poll_gamma_active()
+                logger.info("Gamma active done: %d", a)
                 u = await self._poll_gamma_upcoming()
+                logger.info("Gamma upcoming done: %d", u)
                 c = await self._poll_gamma_closed()
                 logger.info("Gamma poll cycle: active=%d upcoming=%d closed=%d watchlist=%d seen=%d",
                             a, u, c, len(self._watchlist), len(self._seen_market_ids))
