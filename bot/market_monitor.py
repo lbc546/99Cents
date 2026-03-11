@@ -148,6 +148,7 @@ class MarketMonitor:
 
     async def _rate_limited_gamma_get(self, url: str, params: dict | None = None) -> dict | list | None:
         """Rate-limited GET to Gamma API with retry on 429."""
+        logger.info("Gamma GET waiting for semaphore...")
         async with self._gamma_sem:
             elapsed = time.monotonic() - self._last_gamma_call
             if elapsed < self._gamma_min_interval:
@@ -156,8 +157,9 @@ class MarketMonitor:
             session = await self._get_session()
             for attempt in range(3):
                 try:
+                    logger.info("Gamma GET attempt %d: %s", attempt + 1, url.split("/")[-1])
                     async with session.get(url, params=params,
-                                           timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                                           timeout=aiohttp.ClientTimeout(total=15)) as resp:
                         self._last_gamma_call = time.monotonic()
                         if resp.status == 429:
                             wait = (2 ** attempt) * 5
@@ -165,9 +167,11 @@ class MarketMonitor:
                             await asyncio.sleep(wait)
                             continue
                         if resp.status != 200:
+                            logger.warning("Gamma HTTP %d: %s", resp.status, url)
                             return None
                         return await resp.json()
-                except (aiohttp.ClientError, asyncio.TimeoutError):
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    logger.warning("Gamma request error (attempt %d): %s", attempt + 1, e)
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
                     else:
