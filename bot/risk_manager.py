@@ -65,6 +65,10 @@ class RiskManager:
         self._daily_fill_sizes: list[float] = []
         self._daily_capital_samples: list[float] = []
 
+        # Cut-loss tracking
+        self._daily_cut_losses: int = 0
+        self._daily_cut_loss_amount: float = 0.0
+
         # Consecutive failure tracking
         self._consecutive_failures: int = 0
 
@@ -125,13 +129,11 @@ class RiskManager:
             logger.exception("Failed to save blacklist")
 
     def _save_blacklist_sync(self) -> None:
-        """Synchronous atomic write."""
+        """Synchronous write to disk."""
         data = {"markets": dict(self._blacklist)}
-        tmp_path = self._blacklist_path + ".tmp"
         os.makedirs(os.path.dirname(self._blacklist_path) or ".", exist_ok=True)
-        with open(tmp_path, "w") as f:
+        with open(self._blacklist_path, "w") as f:
             json.dump(data, f, indent=2)
-        os.replace(tmp_path, self._blacklist_path)
 
     def _clean_expired(self) -> None:
         """Remove expired blacklist entries in-place."""
@@ -313,6 +315,8 @@ class RiskManager:
         self._daily_net_profit = 0.0
         self._daily_fill_sizes = []
         self._daily_capital_samples = []
+        self._daily_cut_losses = 0
+        self._daily_cut_loss_amount = 0.0
 
     def record_opportunity_seen(self) -> None:
         """Increment daily seen counter."""
@@ -363,6 +367,23 @@ class RiskManager:
                           details={"reason": "daily_loss_limit",
                                    "daily_net_profit": self._daily_net_profit})
 
+    def record_cut_loss(self, market_id: str, loss_amount: float,
+                        question: str = "") -> None:
+        """Record a completed cut-loss. Blacklists market for 7 days."""
+        self._check_daily_reset()
+        self._daily_cut_losses += 1
+        self._daily_cut_loss_amount += loss_amount
+        log_event(logger, "CUTLOSS_RECORDED",
+                  "Cut loss #%d today: -$%.2f (total: -$%.2f) | %s" % (
+                      self._daily_cut_losses, loss_amount,
+                      self._daily_cut_loss_amount, question[:50]),
+                  level="WARNING",
+                  market_id=market_id,
+                  details={"loss": round(loss_amount, 2),
+                           "daily_count": self._daily_cut_losses,
+                           "daily_total": round(self._daily_cut_loss_amount, 2)})
+        self.blacklist_market(market_id, "cut_loss", question)
+
     def record_settlement_timeout(self, market_id: str, question: str = "") -> None:
         """Market evicted from watchlist after 48h without settling."""
         asyncio.create_task(
@@ -406,6 +427,8 @@ class RiskManager:
             "circuit_breaker_reason": self._circuit_reason,
             "ws_connected": self._ws_connected,
             "blacklist_size": len(self._blacklist),
+            "cut_losses_today": self._daily_cut_losses,
+            "cut_loss_total": round(self._daily_cut_loss_amount, 2),
         }
 
     # ------------------------------------------------------------------

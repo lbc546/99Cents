@@ -3,7 +3,7 @@
 
 # --- Trading Parameters ---
 price_threshold: 0.99              # Max price to pay for winning shares
-max_position_per_market: 50       # Max USDC per single market
+max_position_per_market: 80       # Max USDC per single market
 max_total_deployed: 1000            # Max USDC deployed across all positions
 max_open_positions: 20             # Max concurrent open positions
 min_liquidity_usdc: 20             # Min USDC of liquidity available at threshold price
@@ -16,7 +16,7 @@ capital_floor: 0                   # Stop trading if Polymarket balance drops be
 # Entertainment BLOCKED: endDate semantics too inconsistent.
 # Everything else (Politics, Crypto, Weather, etc.) passes through —
 #   price/liquidity/resolution filters handle the rest.
-blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto", "Science/Weather"]
+blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto"]
 surprise_price_cutoff: 0.50        # Filter markets that traded below this near close
 high_confidence_threshold: 0.98    # Pre-resolution: accept leading outcome >= this price
 
@@ -75,7 +75,7 @@ clob_rate_limit_per_min: 85        # Target CLOB req/min (API limit is 100)
 gamma_rate_limit_per_min: 120      # Target Gamma req/min (defensive, no documented limit)
 
 # --- Safety ---
-dry_run: false                     # LIVE trading mode — real orders and on-chain txns
+dry_run: true                     # LIVE trading mode — real orders and on-chain txns
 
 # --- Risk Management ---
 blacklist_manual: []                   # Market IDs to always blacklist
@@ -94,6 +94,17 @@ settlement_timeout_hours:
 price_movement_alert_threshold: 0.03 # Alert if price drops > $0.03 after entry
 esports_variance_cv_threshold: 1.5   # Esports CV threshold for variance alert
 
+# --- Cut Loss ---
+cut_loss_enabled: true               # Enable automatic cut-loss selling
+cut_loss_threshold: 0.75             # Sell when bid AND ask both below this price
+cut_loss_emergency_threshold: 0.50   # Aggressive sell when both below this (skip confirmation)
+cut_loss_check_interval: 30          # Check interval in seconds
+cut_loss_min_hold_minutes: 5         # Grace period after purchase before cut-loss eligible
+cut_loss_confirmations: 2            # Consecutive checks below threshold before selling
+cut_loss_min_bid_depth: 10.0         # Min bid depth in USDC (filters thin books)
+cut_loss_order_ttl: 120              # Sell order TTL before cancel/repost (seconds)
+cut_loss_overdue_threshold: 0.90     # Lower bar for overdue positions (bid+ask both below)
+
 # --- Dashboard ---
-dashboard_enabled: true              # Enable rich terminal dashboard
+dashboard_enabled: false              # Enable rich terminal dashboard
 dashboard_refresh_seconds: 5         # Dashboard refresh interval

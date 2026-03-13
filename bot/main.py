@@ -67,6 +67,9 @@ async def main(config_path: str = "config.yaml"):
                  config.rpc_poll_interval_seconds, config.rpc_poll_batch_size)
     logger.info("CT Framework: %s", config.ct_framework_address)
     logger.info("Settlement thresholds: %s", config.settlement_timeout_hours)
+    logger.info("Cut-loss: %s (threshold=$%.2f, emergency=$%.2f)",
+                 "ENABLED" if config.cut_loss_enabled else "DISABLED",
+                 config.cut_loss_threshold, config.cut_loss_emergency_threshold)
     logger.info("=" * 60)
 
     # Initialize components
@@ -136,6 +139,7 @@ async def main(config_path: str = "config.yaml"):
         asyncio.create_task(tracker.run_rpc_resolution_monitor(), name="rpc_resolution_monitor"),
         asyncio.create_task(tracker.run_clob_settlement_monitor(), name="clob_settlement_monitor"),
         asyncio.create_task(tracker.run_anomaly_monitor(), name="anomaly_monitor"),
+        asyncio.create_task(tracker.run_cut_loss_monitor(), name="cut_loss_monitor"),
         asyncio.create_task(daily_summary.run_daily_summary(), name="daily_summary"),
         asyncio.create_task(shutdown_event.wait(), name="shutdown_wait"),
     ]

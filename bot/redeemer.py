@@ -87,10 +87,14 @@ class Redeemer:
         while True:
             try:
                 redeemable = self.order_manager.get_redeemable_positions()
+                if redeemable:
+                    logger.info("Redeemer: %d filled positions to check", len(redeemable))
+
                 for pos in redeemable:
                     # Skip if in backoff from previous failed attempts
                     next_retry = self._redeem_next_retry.get(pos.order_id, 0)
                     if time.time() < next_retry:
+                        logger.info("Redeemer skip (backoff): %s", pos.question[:40])
                         continue
 
                     # FAST PATH: if settlement tracker confirmed resolution
@@ -99,6 +103,7 @@ class Redeemer:
                     if (self.settlement_tracker
                             and self.settlement_tracker.is_resolution_confirmed(
                                 pos.order_id)):
+                        logger.info("Redeemer FAST PATH: resolution confirmed for %s", pos.question[:40])
                         await self._redeem(pos.order_id, pos.condition_id,
                                            pos.market_id, pos.question)
                         continue
@@ -108,12 +113,15 @@ class Redeemer:
                     if hours_since_fill < 2.5:
                         # Before UMA window: only attempt if market is confirmed resolved
                         if not await self._is_market_resolved(pos):
+                            logger.info("Redeemer skip (not resolved, %.1fh old): %s",
+                                        hours_since_fill, pos.question[:40])
                             continue
 
                     # Check for disputes (only after UMA window — empty fields
                     # are normal during first 2hrs post-resolution)
                     if self.risk_manager:
                         if await self._check_position_dispute(pos):
+                            logger.warning("Redeemer: DISPUTE detected for %s", pos.question[:40])
                             self.risk_manager.report_dispute(
                                 pos.market_id, pos.question)
                             self.risk_manager.record_trade_result(
@@ -122,7 +130,11 @@ class Redeemer:
                             continue
 
                     # Verify on-chain resolution before spending gas
-                    if not await self._is_resolved_onchain(pos):
+                    resolved = await self._is_resolved_onchain(pos)
+                    if not resolved:
+                        logger.info("Redeemer skip (not resolved on-chain, cond=%s): %s",
+                                    pos.condition_id[:18] if pos.condition_id else "EMPTY",
+                                    pos.question[:40])
                         continue
 
                     await self._redeem(pos.order_id, pos.condition_id,
@@ -240,6 +252,7 @@ class Redeemer:
         'result for condition not received yet'.
         """
         if not pos.condition_id:
+            logger.info("Redeemer: no condition_id for %s", pos.question[:40])
             return False
 
         self._init_web3()
@@ -258,6 +271,7 @@ class Redeemer:
             logger.info("payoutNumerators(%s, 0) = %s", pos.condition_id[:18], payout)
             if payout > 0:
                 return True
+            logger.info("Redeemer: payout=0 for %s (not resolved yet)", pos.condition_id[:18])
             return False
         except Exception as e:
             logger.warning("On-chain resolution check failed for %s: %s",

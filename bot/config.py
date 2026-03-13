@@ -94,6 +94,17 @@ class BotConfig:
     price_movement_alert_threshold: float = 0.03
     esports_variance_cv_threshold: float = 1.5
 
+    # Cut loss
+    cut_loss_enabled: bool = True
+    cut_loss_threshold: float = 0.75
+    cut_loss_emergency_threshold: float = 0.50
+    cut_loss_check_interval: int = 30
+    cut_loss_min_hold_minutes: int = 5
+    cut_loss_confirmations: int = 2
+    cut_loss_min_bid_depth: float = 10.0
+    cut_loss_order_ttl: int = 120
+    cut_loss_overdue_threshold: float = 0.90
+
     # Dashboard
     dashboard_enabled: bool = False
     dashboard_refresh_seconds: int = 5

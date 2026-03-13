@@ -489,6 +489,179 @@ class SettlementTracker:
             )
 
     # ------------------------------------------------------------------
+    # Cut-loss monitor
+    # ------------------------------------------------------------------
+
+    async def run_cut_loss_monitor(self):
+        """Monitor filled positions and sell if price drops below threshold.
+
+        Requires both best bid AND best ask below threshold to confirm
+        genuine market consensus (not just a thin/manipulated book).
+        """
+        if not self.config.cut_loss_enabled:
+            logger.info("Cut-loss monitor disabled")
+            await asyncio.Event().wait()
+            return
+
+        logger.info("Cut-loss monitor started (threshold=$%.2f, emergency=$%.2f, interval=%ds)",
+                     self.config.cut_loss_threshold,
+                     self.config.cut_loss_emergency_threshold,
+                     self.config.cut_loss_check_interval)
+        await asyncio.sleep(60)  # let positions accumulate
+
+        # Track consecutive below-threshold checks per order_id
+        cut_loss_counts: dict[str, int] = {}
+
+        while True:
+            try:
+                await self._check_cut_loss(cut_loss_counts)
+            except Exception:
+                logger.exception("Cut-loss monitor error")
+            await asyncio.sleep(self.config.cut_loss_check_interval)
+
+    async def _check_cut_loss(self, counts: dict[str, int]):
+        """Check all filled positions for cut-loss conditions."""
+        filled = [
+            p for p in self.order_manager.positions.values()
+            if p.status == "filled"
+            and p.order_id not in self._resolution_confirmed
+            and not p.cut_loss_order_id  # no outstanding sell
+        ]
+
+        if not filled:
+            logger.debug("Cut-loss: no eligible positions")
+            return
+
+        logger.info("Cut-loss check: %d filled positions to evaluate", len(filled))
+
+        now = time.time()
+        min_hold_sec = self.config.cut_loss_min_hold_minutes * 60
+
+        async with aiohttp.ClientSession() as session:
+            for pos in filled:
+                # Skip if held less than min hold time
+                if pos.filled_at > 0 and (now - pos.filled_at) < min_hold_sec:
+                    hold_sec = now - pos.filled_at
+                    logger.info("Cut-loss skip (hold=%.0fs < %ds): %s",
+                                hold_sec, min_hold_sec, pos.question[:40])
+                    continue
+
+                # Fetch orderbook
+                url = "%s/book" % self.config.clob_base_url
+                try:
+                    async with session.get(
+                        url,
+                        params={"token_id": pos.token_id},
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.info("Cut-loss skip (book HTTP %d): %s",
+                                        resp.status, pos.question[:40])
+                            continue
+                        book = await resp.json()
+                except Exception as e:
+                    logger.info("Cut-loss skip (book error: %s): %s",
+                                str(e)[:40], pos.question[:40])
+                    continue
+
+                bids = book.get("bids", [])
+                asks = book.get("asks", [])
+
+                if not bids:
+                    logger.info("Cut-loss skip (no bids): %s", pos.question[:40])
+                    continue
+
+                best_bid = float(bids[0].get("price", 0))
+                best_ask = float(asks[0].get("price", 1.0)) if asks else 1.0
+
+                # Skip torn-down books (post-resolution)
+                if best_bid < 0.02:
+                    logger.info("Cut-loss skip (bid=$%.2f, book torn down): %s",
+                                best_bid, pos.question[:40])
+                    continue
+
+                # Check bid depth
+                total_bid_depth = sum(
+                    float(b.get("size", 0)) * float(b.get("price", 0))
+                    for b in bids
+                )
+                if total_bid_depth < self.config.cut_loss_min_bid_depth:
+                    logger.info("Cut-loss skip (depth=$%.1f < $%.1f): %s",
+                                total_bid_depth, self.config.cut_loss_min_bid_depth,
+                                pos.question[:40])
+                    continue
+
+                hold_hours = (now - pos.filled_at) / 3600 if pos.filled_at > 0 else 0
+                logger.info("Cut-loss eval: bid=$%.2f ask=$%.2f depth=$%.0f hold=%.1fh | %s",
+                            best_bid, best_ask, total_bid_depth, hold_hours,
+                            pos.question[:50])
+
+                # Overdue escalation: held past timeout AND both bid+ask below overdue threshold
+                timeout = self.config.settlement_timeout_hours.get(
+                    pos.category,
+                    self.config.settlement_timeout_hours.get("default", 24),
+                )
+                if (hold_hours > timeout
+                        and best_bid < self.config.cut_loss_overdue_threshold
+                        and best_ask < self.config.cut_loss_overdue_threshold):
+                    log_event(logger, "CUTLOSS_OVERDUE_TRIGGER",
+                              "Overdue %.1fh + bid=$%.2f ask=$%.2f | %s" % (
+                                  hold_hours, best_bid, best_ask, pos.question[:50]),
+                              level="WARNING", market_id=pos.market_id)
+                    self.order_manager.place_sell_order(pos.order_id, best_bid)
+                    if self.risk_manager:
+                        actual_loss = pos.cost - pos.size * best_bid
+                        self.risk_manager.record_trade_result(
+                            net_profit=-actual_loss, gas_cost=0.0)
+                        self.risk_manager.record_cut_loss(
+                            pos.market_id, actual_loss, pos.question)
+                    continue
+
+                # Emergency: both bid AND ask below emergency threshold → immediate sell
+                if (best_bid <= self.config.cut_loss_emergency_threshold
+                        and best_ask <= self.config.cut_loss_emergency_threshold):
+                    sell_price = max(best_bid - 0.01, 0.01)
+                    log_event(logger, "CUTLOSS_EMERGENCY",
+                              "EMERGENCY bid=$%.2f ask=$%.2f | sell@$%.2f | %s" % (
+                                  best_bid, best_ask, sell_price, pos.question[:50]),
+                              level="WARNING", market_id=pos.market_id)
+                    self.order_manager.place_sell_order(pos.order_id, sell_price)
+                    if self.risk_manager:
+                        actual_loss = pos.cost - pos.size * sell_price
+                        self.risk_manager.record_trade_result(
+                            net_profit=-actual_loss, gas_cost=0.0)
+                        self.risk_manager.record_cut_loss(
+                            pos.market_id, actual_loss, pos.question)
+                    counts.pop(pos.order_id, None)
+                    continue
+
+                # Normal: both bid AND ask below threshold
+                if (best_bid <= self.config.cut_loss_threshold
+                        and best_ask <= self.config.cut_loss_threshold):
+                    counts[pos.order_id] = counts.get(pos.order_id, 0) + 1
+                    log_event(logger, "CUTLOSS_ALERT",
+                              "bid=$%.2f ask=$%.2f (%d/%d confirms) | %s" % (
+                                  best_bid, best_ask,
+                                  counts[pos.order_id],
+                                  self.config.cut_loss_confirmations,
+                                  pos.question[:50]),
+                              level="WARNING", market_id=pos.market_id)
+
+                    if counts[pos.order_id] >= self.config.cut_loss_confirmations:
+                        self.order_manager.place_sell_order(pos.order_id, best_bid)
+                        if self.risk_manager:
+                            actual_loss = pos.cost - pos.size * best_bid
+                            self.risk_manager.record_trade_result(
+                                net_profit=-actual_loss, gas_cost=0.0)
+                            self.risk_manager.record_cut_loss(
+                                pos.market_id, actual_loss, pos.question)
+                        counts.pop(pos.order_id, None)
+                else:
+                    # Price recovered — reset counter
+                    if pos.order_id in counts:
+                        counts.pop(pos.order_id)
+
+    # ------------------------------------------------------------------
     # Trade completion logging (called by Redeemer after redemption)
     # ------------------------------------------------------------------
 

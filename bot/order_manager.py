@@ -39,11 +39,13 @@ class Position:
     gross_profit: float
     gas_cost: float
     net_profit: float
-    status: str  # "pending", "filled", "cancelled", "redeemed"
+    status: str  # "pending", "filled", "cancelled", "redeemed", "disputed", "cut_loss"
     placed_at: float
     filled_at: float = 0.0
     source: str = ""
     score: float = 0.0
+    cut_loss_order_id: str = ""
+    cut_loss_triggered_at: float = 0.0
 
 
 class OrderManager:
@@ -725,6 +727,137 @@ class OrderManager:
                       details={"age_seconds": time.time() - pos.placed_at})
         except Exception:
             logger.exception("Failed to cancel order %s", order_id)
+
+    # ------------------------------------------------------------------
+    # Cut-loss sell orders
+    # ------------------------------------------------------------------
+
+    def place_sell_order(self, order_id: str, sell_price: float) -> str | None:
+        """Place a GTC limit sell order to exit a filled position.
+
+        Returns the sell order ID on success, None on failure.
+        """
+        pos = self.positions.get(order_id)
+        if not pos or pos.status != "filled":
+            return None
+
+        if self.config.dry_run:
+            sell_id = "sell_dry_%s_%d" % (order_id[:16], int(time.time()))
+            pos.cut_loss_order_id = sell_id
+            pos.cut_loss_triggered_at = time.time()
+            pos.status = "cut_loss"
+            self._save_positions()
+            log_event(logger, "CUTLOSS_SELL",
+                      "[DRY RUN] SELL %.1f @ $%.2f | loss=$%.2f | %s" % (
+                          pos.size, sell_price, pos.cost - pos.size * sell_price,
+                          pos.question[:50]),
+                      market_id=pos.market_id, order_id=order_id,
+                      details={"sell_price": sell_price, "dry_run": True})
+            return sell_id
+
+        client = self._get_client()
+        if client is None:
+            logger.error("Cannot place sell: CLOB client not initialized")
+            return None
+
+        try:
+            from py_clob_client.clob_types import OrderArgs, PartialCreateOrderOptions
+            from py_clob_client.order_builder.constants import SELL
+
+            resp = client.create_and_post_order(
+                OrderArgs(
+                    token_id=pos.token_id,
+                    price=sell_price,
+                    size=pos.size,
+                    side=SELL,
+                ),
+                PartialCreateOrderOptions(
+                    tick_size=self.config.tick_size,
+                ),
+            )
+
+            sell_id = resp.get("orderID", "")
+            status = resp.get("status", "unknown")
+            success = status in ("matched", "live", "delayed")
+
+            if not success:
+                log_event(logger, "CUTLOSS_SELL_REJECTED",
+                          "Sell rejected: status=%s | %s" % (status, pos.question[:50]),
+                          level="WARNING", market_id=pos.market_id, order_id=order_id,
+                          details={"response": resp})
+                return None
+
+            pos.cut_loss_order_id = sell_id
+            pos.cut_loss_triggered_at = time.time()
+
+            if status == "matched":
+                # Immediately filled
+                actual_proceeds = pos.size * sell_price
+                actual_loss = pos.cost - actual_proceeds
+                pos.status = "cut_loss"
+                pos.net_profit = -actual_loss
+                if self.risk_manager:
+                    self.risk_manager.record_trade_result(
+                        net_profit=-actual_loss, gas_cost=0.0)
+
+            self._save_positions()
+            log_event(logger, "CUTLOSS_SELL",
+                      "SELL %.1f @ $%.2f | status=%s | %s" % (
+                          pos.size, sell_price, status, pos.question[:50]),
+                      market_id=pos.market_id, order_id=order_id,
+                      details={"sell_id": sell_id, "sell_price": sell_price,
+                               "status": status})
+            return sell_id
+
+        except Exception as e:
+            log_event(logger, "CUTLOSS_SELL_ERROR",
+                      "Sell failed: %s | %s" % (str(e)[:80], pos.question[:50]),
+                      level="ERROR", market_id=pos.market_id, order_id=order_id)
+            return None
+
+    def cancel_sell_order(self, order_id: str) -> bool:
+        """Cancel an outstanding cut-loss sell order."""
+        pos = self.positions.get(order_id)
+        if not pos or not pos.cut_loss_order_id:
+            return False
+
+        if self.config.dry_run:
+            pos.cut_loss_order_id = ""
+            pos.cut_loss_triggered_at = 0.0
+            self._save_positions()
+            return True
+
+        client = self._get_client()
+        if client is None:
+            return False
+
+        try:
+            client.cancel(pos.cut_loss_order_id)
+            pos.cut_loss_order_id = ""
+            pos.cut_loss_triggered_at = 0.0
+            self._save_positions()
+            return True
+        except Exception:
+            logger.exception("Failed to cancel sell order %s", pos.cut_loss_order_id)
+            return False
+
+    def mark_cut_loss(self, order_id: str, sell_price: float):
+        """Mark a position as cut-loss after sell order fills."""
+        pos = self.positions.get(order_id)
+        if not pos:
+            return
+        actual_proceeds = pos.size * sell_price
+        actual_loss = pos.cost - actual_proceeds
+        pos.status = "cut_loss"
+        pos.net_profit = -actual_loss
+        self._save_positions()
+        log_event(logger, "CUTLOSS_COMPLETED",
+                  "Cut loss: sold %.1f @ $%.2f | loss=$%.2f | %s" % (
+                      pos.size, sell_price, actual_loss, pos.question[:50]),
+                  level="WARNING",
+                  market_id=pos.market_id, order_id=order_id,
+                  details={"entry_price": pos.price, "sell_price": sell_price,
+                           "loss": round(actual_loss, 2)})
 
     # ------------------------------------------------------------------
     # Logging helpers
