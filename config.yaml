@@ -75,7 +75,7 @@ clob_rate_limit_per_min: 85        # Target CLOB req/min (API limit is 100)
 gamma_rate_limit_per_min: 120      # Target Gamma req/min (defensive, no documented limit)
 
 # --- Safety ---
-dry_run: true                     # LIVE trading mode — real orders and on-chain txns
+dry_run: false                    # LIVE trading mode — real orders and on-chain txns
 
 # --- Risk Management ---
 blacklist_manual: []                   # Market IDs to always blacklist
