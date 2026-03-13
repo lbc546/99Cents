@@ -132,10 +132,18 @@ class Redeemer:
                     # Verify on-chain resolution before spending gas
                     resolved = await self._is_resolved_onchain(pos)
                     if not resolved:
-                        logger.info("Redeemer skip (not resolved on-chain, cond=%s): %s",
-                                    pos.condition_id[:18] if pos.condition_id else "EMPTY",
-                                    pos.question[:40])
-                        continue
+                        # Fallback: if Gamma confirms market is resolved AND
+                        # position is old enough, attempt redemption anyway.
+                        # NegRisk markets use a different contract for payouts
+                        # so payoutNumerators on CTF returns 0 even when claimable.
+                        if hours_since_fill >= 2.5 and await self._is_market_resolved(pos):
+                            logger.info("Redeemer: payout=0 but Gamma says resolved, attempting: %s",
+                                        pos.question[:40])
+                        else:
+                            logger.info("Redeemer skip (not resolved on-chain, cond=%s): %s",
+                                        pos.condition_id[:18] if pos.condition_id else "EMPTY",
+                                        pos.question[:40])
+                            continue
 
                     await self._redeem(pos.order_id, pos.condition_id,
                                        pos.market_id, pos.question)
