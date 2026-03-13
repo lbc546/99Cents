@@ -620,10 +620,10 @@ class SettlementTracker:
                             pos.market_id, actual_loss, pos.question)
                     continue
 
-                # Emergency: both bid AND ask below emergency threshold → immediate sell
+                # Emergency: both bid AND ask below emergency threshold → immediate sell at $0.40
                 if (best_bid <= self.config.cut_loss_emergency_threshold
                         and best_ask <= self.config.cut_loss_emergency_threshold):
-                    sell_price = max(best_bid - 0.01, 0.01)
+                    sell_price = 0.40
                     log_event(logger, "CUTLOSS_EMERGENCY",
                               "EMERGENCY bid=$%.2f ask=$%.2f | sell@$%.2f | %s" % (
                                   best_bid, best_ask, sell_price, pos.question[:50]),
@@ -651,9 +651,9 @@ class SettlementTracker:
                               level="WARNING", market_id=pos.market_id)
 
                     if counts[pos.order_id] >= self.config.cut_loss_confirmations:
-                        self.order_manager.place_sell_order(pos.order_id, best_bid)
+                        self.order_manager.place_sell_order(pos.order_id, 0.70)
                         if self.risk_manager:
-                            actual_loss = pos.cost - pos.size * best_bid
+                            actual_loss = pos.cost - pos.size * 0.70
                             self.risk_manager.record_trade_result(
                                 net_profit=-actual_loss, gas_cost=0.0)
                             self.risk_manager.record_cut_loss(
