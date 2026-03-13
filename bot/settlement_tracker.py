@@ -423,7 +423,7 @@ class SettlementTracker:
                         book = await resp.json()
                         bids = book.get("bids", [])
                         if bids:
-                            best_bid = float(bids[0].get("price", 0))
+                            best_bid = max(float(b.get("price", 0)) for b in bids)
                             if best_bid < 0.02:
                                 continue  # Book torn down post-resolution, not a real drop
                             drop = pos.price - best_bid
@@ -571,8 +571,10 @@ class SettlementTracker:
                     logger.info("Cut-loss skip (no bids): %s", pos.question[:40])
                     continue
 
-                best_bid = float(bids[0].get("price", 0))
-                best_ask = float(asks[0].get("price", 1.0)) if asks else 1.0
+                # CLOB returns bids ascending — best bid is the highest
+                best_bid = max(float(b.get("price", 0)) for b in bids)
+                # CLOB returns asks descending — best ask is the lowest
+                best_ask = min(float(a.get("price", 1.0)) for a in asks) if asks else 1.0
 
                 # Skip torn-down books (post-resolution)
                 if best_bid < 0.02:
