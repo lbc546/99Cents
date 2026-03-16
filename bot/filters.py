@@ -261,8 +261,8 @@ _SUBJECTIVE_PATTERNS = [
 _LIVE_EVENT_PATTERNS = [
     re.compile(p, re.IGNORECASE)
     for p in [
-        r"\bsay\b.+\bduring\b",        # "Will X say ... during ..."
-        r"\bmention\b.+\bduring\b",     # "Will X mention ... during ..."
+        r"^will\b.+\bsay\b",            # "Will X say ..." (any context)
+        r"\bmention\b",                 # "Will X mention ..." (any context)
         r"\bwear\b.+\bduring\b",        # "Will X wear ... during ..."
         r"\b\d+\s*times?\b.+\bduring\b",  # "... 15 times during ..."
         r"\bduring\b.+\bspeech\b",      # "during ... speech"
@@ -271,6 +271,7 @@ _LIVE_EVENT_PATTERNS = [
         r"\bduring\b.+\bpress\s*conference\b",
         r"\bduring\b.+\baddress\b",
         r"\bduring\b.+\brally\b",
+        r"\bsay\b.+\bin\s+(a\s+)?tweet\b",  # "Will X say ... in a tweet"
     ]
 ]
 
