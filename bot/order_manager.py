@@ -409,8 +409,10 @@ class OrderManager:
             return
 
         # 2a. Per-market cooldown (prevents duplicate orders from delayed responses)
-        last_order = self._market_order_timestamps.get(market_id, 0)
-        if time.time() - last_order < 60:
+        now = time.time()
+        last_by_market = self._market_order_timestamps.get(market_id, 0)
+        last_by_token = self._market_order_timestamps.get(token_id, 0)
+        if now - last_by_market < 60 or now - last_by_token < 60:
             self._log_skip(market_id, token_id, question, category,
                            "market_cooldown_60s")
             return
@@ -482,6 +484,10 @@ class OrderManager:
             return
 
         # --- Execute order ---
+
+        # Set cooldown BEFORE placing order to prevent concurrent duplicates
+        self._market_order_timestamps[market_id] = time.time()
+        self._market_order_timestamps[token_id] = time.time()
 
         log_event(logger, "ORDER_ATTEMPT",
                   "BUY %.1f shares @ $%.2f = $%.2f | "
