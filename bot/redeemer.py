@@ -179,6 +179,12 @@ class Redeemer:
                         order_id, pos.gas_cost, time.time())
             return
 
+        # On-chain redemption disabled — NegRisk markets use Gnosis Safe
+        # which requires a different contract path. Redeem manually on website.
+        # The sync_redeemed_positions() call below will detect website redemptions.
+        logger.info("Redeemer: on-chain redemption disabled, redeem manually: %s", question[:60])
+        return
+
         self._init_web3()
         if not self._w3 or not self._account or not self._contract:
             logger.error("Web3 not initialized, cannot redeem")
