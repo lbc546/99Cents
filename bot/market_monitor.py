@@ -814,6 +814,33 @@ class MarketMonitor:
         # gamma_closed: skip timing (oracle already resolved).
         # gamma_upcoming weather: endDate < 4hr (afternoon peak likely passed).
         # gamma_upcoming non-weather: endDate < 1hr AND confidence >= 0.99.
+        #
+        # Weather guard (all sources except gamma_closed): endDate often
+        # is midnight UTC but the high temp isn't known until late afternoon
+        # local time. Require at least 4 hours past endDate for gamma_active,
+        # or within 4 hours of endDate for gamma_upcoming.
+        if category == "Science/Weather" and source != "gamma_closed" and end_date:
+            try:
+                end_dt = datetime.fromisoformat(
+                    end_date.replace("Z", "+00:00"))
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
+                hours_since_end = (datetime.now(timezone.utc) - end_dt).total_seconds() / 3600
+                if source == "gamma_upcoming":
+                    # Before endDate: allow if within 4 hours
+                    if hours_since_end < -4:
+                        self._log_filtered(market_id, question, category, source,
+                                           "weather_too_early=%.1fh" % -hours_since_end)
+                        return
+                else:
+                    # After endDate: require at least 4 hours past
+                    if hours_since_end < 4:
+                        self._log_filtered(market_id, question, category, source,
+                                           "weather_too_soon_after_end=%.1fh" % hours_since_end)
+                        return
+            except (ValueError, TypeError):
+                pass
+
         if source == "gamma_upcoming":
             try:
                 end_dt = datetime.fromisoformat(
@@ -821,13 +848,7 @@ class MarketMonitor:
                 if end_dt:
                     hours_to_end = (end_dt - datetime.now(
                         timezone.utc)).total_seconds() / 3600
-                    if category == "Science/Weather":
-                        # Weather: allow if endDate within 4 hours
-                        if hours_to_end > 4:
-                            self._log_filtered(market_id, question, category, source,
-                                               "weather_too_early=%.1fh" % hours_to_end)
-                            return
-                    else:
+                    if category != "Science/Weather":
                         # Non-weather: endDate within 1 hour
                         if hours_to_end > 1:
                             self._log_filtered(market_id, question, category, source,
