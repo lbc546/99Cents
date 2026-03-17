@@ -348,8 +348,8 @@ _CITY_UTC_OFFSETS: dict[str, float] = {
 def is_weather_temp_known(question: str) -> bool:
     """Check if it's late enough in the city's local time for daily high temp.
 
-    Daily high temperatures are typically recorded by 5 PM local time.
-    Returns True if local time >= 17:00, meaning it's safe to trade.
+    Daily high temperatures are typically recorded by early-mid afternoon.
+    Returns True if local time >= 15:00 (3 PM), meaning it's safe to trade.
     Returns True if city can't be identified (don't block unknown cities).
     """
     q_lower = question.lower()
@@ -364,10 +364,9 @@ def is_weather_temp_known(question: str) -> bool:
         return True  # Unknown city, don't block
 
     offset = _CITY_UTC_OFFSETS[matched_city]
-    from datetime import timezone as tz
-    utc_now = datetime.now(tz.utc)
+    utc_now = datetime.now(timezone.utc)
     local_hour = (utc_now.hour + offset) % 24
-    return local_hour >= 17
+    return local_hour >= 15
 
 
 def was_below_threshold_pre_close(
