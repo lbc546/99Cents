@@ -36,6 +36,7 @@ from bot.filters import (
     infer_category,
     is_crypto_short_term,
     is_live_event_market,
+    is_weather_temp_known,
     parse_json_field,
     score_opportunity,
     was_below_threshold_pre_close,
@@ -815,31 +816,14 @@ class MarketMonitor:
         # gamma_upcoming weather: endDate < 4hr (afternoon peak likely passed).
         # gamma_upcoming non-weather: endDate < 1hr AND confidence >= 0.99.
         #
-        # Weather guard (all sources except gamma_closed): endDate often
-        # is midnight UTC but the high temp isn't known until late afternoon
-        # local time. Require at least 4 hours past endDate for gamma_active,
-        # or within 4 hours of endDate for gamma_upcoming.
-        if category == "Science/Weather" and source != "gamma_closed" and end_date:
-            try:
-                end_dt = datetime.fromisoformat(
-                    end_date.replace("Z", "+00:00"))
-                if end_dt.tzinfo is None:
-                    end_dt = end_dt.replace(tzinfo=timezone.utc)
-                hours_since_end = (datetime.now(timezone.utc) - end_dt).total_seconds() / 3600
-                if source == "gamma_upcoming":
-                    # Before endDate: allow if within 4 hours
-                    if hours_since_end < -4:
-                        self._log_filtered(market_id, question, category, source,
-                                           "weather_too_early=%.1fh" % -hours_since_end)
-                        return
-                else:
-                    # After endDate: require at least 4 hours past
-                    if hours_since_end < 4:
-                        self._log_filtered(market_id, question, category, source,
-                                           "weather_too_soon_after_end=%.1fh" % hours_since_end)
-                        return
-            except (ValueError, TypeError):
-                pass
+        # Weather guard (all sources except gamma_closed): check if it's
+        # past 5 PM local time in the market's city. Daily high temps aren't
+        # finalized until late afternoon. Uses city-to-timezone mapping.
+        if category == "Science/Weather" and source != "gamma_closed":
+            if not is_weather_temp_known(question):
+                self._log_filtered(market_id, question, category, source,
+                                   "weather_before_5pm_local")
+                return
 
         if source == "gamma_upcoming":
             try:

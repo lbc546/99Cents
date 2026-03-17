@@ -319,6 +319,57 @@ def check_end_date_timing(end_date_str: str, grace_minutes: int) -> tuple[bool, 
         return False, "invalid_end_date"
 
 
+# City → UTC offset (hours). Covers Polymarket weather markets.
+# Uses standard time; DST adds +1 for US cities Mar-Nov.
+_CITY_UTC_OFFSETS: dict[str, float] = {
+    # US cities (CDT/EDT/PDT/MDT — DST active roughly Mar-Nov)
+    "dallas": -5, "houston": -5, "austin": -5, "san antonio": -5,
+    "chicago": -5, "detroit": -4, "minneapolis": -5, "st. louis": -5,
+    "new york": -4, "nyc": -4, "boston": -4, "philadelphia": -4,
+    "washington": -4, "atlanta": -4, "miami": -4, "orlando": -4,
+    "charlotte": -4, "nashville": -5, "memphis": -5,
+    "denver": -6, "phoenix": -7, "salt lake": -6,
+    "los angeles": -7, "san francisco": -7, "seattle": -7, "portland": -7,
+    "las vegas": -7, "san diego": -7,
+    "anchorage": -8, "honolulu": -10,
+    # International
+    "london": 1, "paris": 2, "berlin": 2, "madrid": 2, "rome": 2,
+    "amsterdam": 2, "brussels": 2, "vienna": 2, "zurich": 2,
+    "tokyo": 9, "osaka": 9, "seoul": 9, "beijing": 8, "shanghai": 8,
+    "hong kong": 8, "singapore": 8, "bangkok": 7,
+    "mumbai": 5.5, "delhi": 5.5, "sydney": 11, "melbourne": 11,
+    "dubai": 4, "istanbul": 3, "moscow": 3,
+    "são paulo": -3, "sao paulo": -3, "rio": -3, "buenos aires": -3,
+    "mexico city": -5, "bogota": -5, "lima": -5, "santiago": -3,
+    "cairo": 2, "johannesburg": 2, "lagos": 1, "nairobi": 3,
+}
+
+
+def is_weather_temp_known(question: str) -> bool:
+    """Check if it's late enough in the city's local time for daily high temp.
+
+    Daily high temperatures are typically recorded by 5 PM local time.
+    Returns True if local time >= 17:00, meaning it's safe to trade.
+    Returns True if city can't be identified (don't block unknown cities).
+    """
+    q_lower = question.lower()
+    matched_city = None
+    for city in _CITY_UTC_OFFSETS:
+        if city in q_lower:
+            # Pick longest match to avoid "new" matching before "new york"
+            if matched_city is None or len(city) > len(matched_city):
+                matched_city = city
+
+    if matched_city is None:
+        return True  # Unknown city, don't block
+
+    offset = _CITY_UTC_OFFSETS[matched_city]
+    from datetime import timezone as tz
+    utc_now = datetime.now(tz.utc)
+    local_hour = (utc_now.hour + offset) % 24
+    return local_hour >= 17
+
+
 def was_below_threshold_pre_close(
     history: list[dict],
     end_date_str: str,
