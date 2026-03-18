@@ -349,14 +349,15 @@ def is_weather_temp_known(question: str) -> bool:
     """Check if it's late enough in the city's local time for daily high temp.
 
     Daily high temperatures are typically recorded by early-mid afternoon.
-    Returns True if local time >= 15:00 (3 PM), meaning it's safe to trade.
-    Returns True if city can't be identified (don't block unknown cities).
+    Extracts the market date from the question and compares to local date/time.
+    Returns True only if the market date is today (local) AND local time >= 3 PM,
+    OR the market date is in the past (local).
+    Returns True if city/date can't be identified (don't block unknown).
     """
     q_lower = question.lower()
     matched_city = None
     for city in _CITY_UTC_OFFSETS:
         if city in q_lower:
-            # Pick longest match to avoid "new" matching before "new york"
             if matched_city is None or len(city) > len(matched_city):
                 matched_city = city
 
@@ -365,7 +366,38 @@ def is_weather_temp_known(question: str) -> bool:
 
     offset = _CITY_UTC_OFFSETS[matched_city]
     utc_now = datetime.now(timezone.utc)
-    local_hour = (utc_now.hour + offset) % 24
+    local_now = utc_now + timedelta(hours=offset)
+    local_date = local_now.date()
+    local_hour = local_now.hour
+
+    # Extract date from question: "on March 17" or "on March 17?"
+    date_match = re.search(
+        r'\bon\s+(january|february|march|april|may|june|july|august|'
+        r'september|october|november|december)\s+(\d{1,2})',
+        q_lower)
+    if not date_match:
+        return True  # Can't parse date, don't block
+
+    month_name = date_match.group(1)
+    day = int(date_match.group(2))
+    month_map = {
+        "january": 1, "february": 2, "march": 3, "april": 4,
+        "may": 5, "june": 6, "july": 7, "august": 8,
+        "september": 9, "october": 10, "november": 11, "december": 12,
+    }
+    month = month_map[month_name]
+
+    try:
+        from datetime import date as date_cls
+        market_date = date_cls(local_date.year, month, day)
+    except ValueError:
+        return True  # Invalid date, don't block
+
+    if market_date < local_date:
+        return True  # Past date, temp is known
+    if market_date > local_date:
+        return False  # Future date, temp not known yet
+    # Today: check if past 3 PM local
     return local_hour >= 15
 
 
