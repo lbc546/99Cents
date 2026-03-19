@@ -322,26 +322,110 @@ def check_end_date_timing(end_date_str: str, grace_minutes: int) -> tuple[bool, 
 # City → UTC offset (hours). Covers Polymarket weather markets.
 # Uses standard time; DST adds +1 for US cities Mar-Nov.
 _CITY_UTC_OFFSETS: dict[str, float] = {
-    # US cities (CDT/EDT/PDT/MDT — DST active roughly Mar-Nov)
-    "dallas": -5, "houston": -5, "austin": -5, "san antonio": -5,
-    "chicago": -5, "detroit": -4, "minneapolis": -5, "st. louis": -5,
+    # US — Eastern (EDT = UTC-4)
     "new york": -4, "nyc": -4, "boston": -4, "philadelphia": -4,
-    "washington": -4, "atlanta": -4, "miami": -4, "orlando": -4,
-    "charlotte": -4, "nashville": -5, "memphis": -5,
-    "denver": -6, "phoenix": -7, "salt lake": -6,
+    "washington": -4, "washington dc": -4, "dc": -4,
+    "atlanta": -4, "miami": -4, "orlando": -4, "tampa": -4,
+    "jacksonville": -4, "charlotte": -4, "raleigh": -4, "richmond": -4,
+    "detroit": -4, "cleveland": -4, "columbus": -4, "cincinnati": -4,
+    "pittsburgh": -4, "indianapolis": -4, "baltimore": -4,
+    "buffalo": -4, "rochester": -4, "hartford": -4, "providence": -4,
+    "norfolk": -4, "virginia beach": -4, "wilmington": -4,
+    "charleston": -4, "savannah": -4, "knoxville": -4, "lexington": -4,
+    "louisville": -4, "grand rapids": -4, "fort lauderdale": -4,
+    # US — Central (CDT = UTC-5)
+    "chicago": -5, "dallas": -5, "houston": -5, "austin": -5,
+    "san antonio": -5, "fort worth": -5, "el paso": -6,
+    "nashville": -5, "memphis": -5, "minneapolis": -5, "st. louis": -5,
+    "kansas city": -5, "milwaukee": -5, "new orleans": -5,
+    "oklahoma city": -5, "omaha": -5, "tulsa": -5, "wichita": -5,
+    "little rock": -5, "des moines": -5, "madison": -5,
+    "birmingham": -5, "montgomery": -5, "baton rouge": -5,
+    "jackson": -5, "corpus christi": -5, "lubbock": -5,
+    "fargo": -5, "sioux falls": -5, "lincoln": -5,
+    # US — Mountain (MDT = UTC-6)
+    "denver": -6, "salt lake": -6, "salt lake city": -6,
+    "albuquerque": -6, "boise": -6, "colorado springs": -6,
+    "tucson": -7, "phoenix": -7,  # Arizona no DST
+    "billings": -6, "cheyenne": -6, "missoula": -6,
+    # US — Pacific (PDT = UTC-7)
     "los angeles": -7, "san francisco": -7, "seattle": -7, "portland": -7,
-    "las vegas": -7, "san diego": -7,
-    "anchorage": -8, "honolulu": -10,
-    # International
-    "london": 1, "paris": 2, "berlin": 2, "madrid": 2, "rome": 2,
+    "las vegas": -7, "san diego": -7, "san jose": -7, "sacramento": -7,
+    "fresno": -7, "oakland": -7, "bakersfield": -7, "riverside": -7,
+    "stockton": -7, "spokane": -7, "tacoma": -7, "reno": -7,
+    # US — Alaska/Hawaii
+    "anchorage": -8, "fairbanks": -8, "juneau": -8,
+    "honolulu": -10,
+    # Canada — Atlantic (ADT = UTC-3)
+    "halifax": -3, "st. john's": -2.5, "fredericton": -3, "moncton": -3,
+    "charlottetown": -3,
+    # Canada — Eastern (EDT = UTC-4)
+    "toronto": -4, "montreal": -4, "ottawa": -4, "quebec city": -4,
+    "hamilton": -4, "kitchener": -4, "london ontario": -4,
+    "windsor": -4, "mississauga": -4, "brampton": -4, "markham": -4,
+    # Canada — Central (CDT = UTC-5)
+    "winnipeg": -5, "regina": -6, "saskatoon": -6, "thunder bay": -4,
+    # Canada — Mountain/Pacific
+    "calgary": -6, "edmonton": -6, "vancouver": -7, "victoria": -7,
+    "kelowna": -7, "surrey": -7,
+    # Mexico
+    "mexico city": -5, "guadalajara": -5, "monterrey": -5,
+    "cancun": -5, "tijuana": -7, "puebla": -5, "juarez": -6,
+    # Central America & Caribbean
+    "havana": -4, "san juan": -4, "santo domingo": -4,
+    "guatemala city": -6, "san salvador": -6, "tegucigalpa": -6,
+    "managua": -6, "san jose cr": -6, "panama city": -5,
+    "kingston": -5, "port-au-prince": -4,
+    # South America
+    "são paulo": -3, "sao paulo": -3, "rio": -3, "rio de janeiro": -3,
+    "brasilia": -3, "buenos aires": -3, "bogota": -5, "lima": -5,
+    "santiago": -3, "caracas": -4, "quito": -5, "montevideo": -3,
+    "asuncion": -4, "la paz": -4, "medellin": -5, "cali": -5,
+    "recife": -3, "belo horizonte": -3, "curitiba": -3,
+    # UK & Ireland
+    "london": 1, "manchester": 1, "birmingham uk": 1, "glasgow": 1,
+    "edinburgh": 1, "liverpool": 1, "bristol": 1, "leeds": 1,
+    "dublin": 1, "belfast": 1, "cardiff": 1,
+    # Western Europe (CEST = UTC+2)
+    "paris": 2, "berlin": 2, "madrid": 2, "rome": 2, "milan": 2,
     "amsterdam": 2, "brussels": 2, "vienna": 2, "zurich": 2,
-    "tokyo": 9, "osaka": 9, "seoul": 9, "beijing": 8, "shanghai": 8,
-    "hong kong": 8, "singapore": 8, "bangkok": 7,
-    "mumbai": 5.5, "delhi": 5.5, "sydney": 11, "melbourne": 11,
-    "dubai": 4, "istanbul": 3, "moscow": 3,
-    "são paulo": -3, "sao paulo": -3, "rio": -3, "buenos aires": -3,
-    "mexico city": -5, "bogota": -5, "lima": -5, "santiago": -3,
-    "cairo": 2, "johannesburg": 2, "lagos": 1, "nairobi": 3,
+    "munich": 2, "hamburg": 2, "barcelona": 2, "lisbon": 1,
+    "prague": 2, "warsaw": 2, "budapest": 2, "copenhagen": 2,
+    "stockholm": 2, "oslo": 2, "helsinki": 3, "athens": 3,
+    "bucharest": 3, "sofia": 3, "belgrade": 2, "zagreb": 2,
+    "lyon": 2, "marseille": 2, "naples": 2, "turin": 2,
+    "frankfurt": 2, "cologne": 2, "dusseldorf": 2, "geneva": 2,
+    # Eastern Europe & Turkey
+    "istanbul": 3, "moscow": 3, "st. petersburg": 3, "kyiv": 3,
+    "minsk": 3, "tbilisi": 4, "yerevan": 4, "baku": 4,
+    # Middle East
+    "dubai": 4, "abu dhabi": 4, "doha": 3, "riyadh": 3, "jeddah": 3,
+    "kuwait city": 3, "muscat": 4, "amman": 3, "beirut": 3,
+    "tel aviv": 3, "jerusalem": 3, "baghdad": 3, "tehran": 3.5,
+    # South Asia
+    "mumbai": 5.5, "delhi": 5.5, "new delhi": 5.5, "bangalore": 5.5,
+    "bengaluru": 5.5, "chennai": 5.5, "kolkata": 5.5, "hyderabad": 5.5,
+    "pune": 5.5, "ahmedabad": 5.5, "jaipur": 5.5,
+    "karachi": 5, "lahore": 5, "islamabad": 5,
+    "dhaka": 6, "colombo": 5.5, "kathmandu": 5.75,
+    # Southeast Asia
+    "bangkok": 7, "jakarta": 7, "singapore": 8, "kuala lumpur": 8,
+    "manila": 8, "ho chi minh": 7, "hanoi": 7, "phnom penh": 7,
+    "yangon": 6.5,
+    # East Asia
+    "tokyo": 9, "osaka": 9, "seoul": 9, "busan": 9,
+    "beijing": 8, "shanghai": 8, "guangzhou": 8, "shenzhen": 8,
+    "chengdu": 8, "wuhan": 8, "nanjing": 8, "hangzhou": 8,
+    "hong kong": 8, "taipei": 8,
+    # Oceania
+    "sydney": 11, "melbourne": 11, "brisbane": 10, "perth": 8,
+    "adelaide": 10.5, "auckland": 13, "wellington": 13,
+    "canberra": 11, "gold coast": 10, "hobart": 11,
+    # Africa
+    "cairo": 2, "johannesburg": 2, "cape town": 2, "lagos": 1,
+    "nairobi": 3, "casablanca": 1, "accra": 0, "addis ababa": 3,
+    "dar es salaam": 3, "kinshasa": 1, "luanda": 1, "tunis": 1,
+    "algiers": 1, "khartoum": 2, "kampala": 3,
 }
 
 
@@ -352,7 +436,8 @@ def is_weather_temp_known(question: str) -> bool:
     Extracts the market date from the question and compares to local date/time.
     Returns True only if the market date is today (local) AND local time >= 3 PM,
     OR the market date is in the past (local).
-    Returns True if city/date can't be identified (don't block unknown).
+    Returns False if city can't be identified (block unknown — safer to skip).
+    Returns True if date can't be parsed (don't block non-date weather markets).
     """
     q_lower = question.lower()
     matched_city = None
@@ -362,7 +447,7 @@ def is_weather_temp_known(question: str) -> bool:
                 matched_city = city
 
     if matched_city is None:
-        return True  # Unknown city, don't block
+        return False  # Unknown city, block to be safe
 
     offset = _CITY_UTC_OFFSETS[matched_city]
     utc_now = datetime.now(timezone.utc)
