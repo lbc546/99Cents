@@ -150,9 +150,15 @@ def infer_category(question: str) -> str:
         return "Politics"
 
     if _word_match(q, [
-        "stock", "s&p", "nasdaq", "dow jones", "fed",
+        "stock", "s&p", "nasdaq", "dow jones", "fed", "fomc",
         "interest rate", "inflation", "gdp", "unemployment",
         "earnings", "revenue", "ipo", "market cap",
+        "cpi", "ppi", "payroll", "jobs report", "nonfarm",
+        "treasury", "bond", "yield", "forex",
+        "tariff", "trade deficit", "trade surplus",
+        "oil price", "gold price", "commodity",
+        "housing starts", "retail sales", "consumer confidence",
+        "pmi", "manufacturing index",
     ]):
         return "Economics/Finance"
 

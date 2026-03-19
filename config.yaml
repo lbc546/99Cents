@@ -62,7 +62,7 @@ end_date_grace_by_category:
   Crypto: 5                        # Price data is instant — 5 min buffer for API lag
   Economics/Finance: 5             # Forex/econ data published at known times
   Science/Weather: 10              # Weather data may take slightly longer to finalize
-  Politics: 30                     # Election results take longer to call/certify
+  Politics: 10                     # Most political outcomes are known quickly; 10min buffer
 price_history_window_hours: 2      # Look-back window for surprise pricing check
 gamma_poll_max_pages: 5            # Max pages per Gamma poll cycle (incremental = usually 1-2)
 gamma_poll_limit: 100              # Markets per Gamma API page
