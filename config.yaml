@@ -4,7 +4,7 @@
 # --- Trading Parameters ---
 price_threshold: 0.99              # Max price to pay for winning shares
 max_position_per_market: 80       # Max USDC per single market
-max_total_deployed: 1000            # Max USDC deployed across all positions
+max_total_deployed: 1500            # Max USDC deployed across all positions
 max_open_positions: 20             # Max concurrent open positions
 min_liquidity_usdc: 20             # Min USDC of liquidity available at threshold price
 capital_floor: 0                   # Stop trading if Polymarket balance drops below this (minimum reserve)
@@ -79,7 +79,7 @@ dry_run: false                    # LIVE trading mode — real orders and on-cha
 
 # --- Risk Management ---
 blacklist_manual: []                   # Market IDs to always blacklist
-daily_loss_limit: 15.0                 # Auto-pause if daily net loss exceeds this (USD)
+daily_loss_limit: 30                # Auto-pause if daily net loss exceeds this (USD)
 consecutive_failure_limit: 10          # Auto-pause after N consecutive failed orders
 stats_log_interval_seconds: 600        # Log daily stats every 10 minutes
 
