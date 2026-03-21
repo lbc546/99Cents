@@ -278,6 +278,15 @@ _LIVE_EVENT_PATTERNS = [
         r"\bduring\b.+\baddress\b",
         r"\bduring\b.+\brally\b",
         r"\bsay\b.+\bin\s+(a\s+)?tweet\b",  # "Will X say ... in a tweet"
+        # Pure speculation — unpredictable events with no data edge
+        r"\boutage\b",                   # service outages
+        r"\bhack(ed)?\b",               # security breaches
+        r"\bbreach\b",                   # data breaches
+        r"\bresign\b",                   # personnel decisions
+        r"\bfired?\b",                   # personnel decisions
+        r"\bstep\s*down\b",             # personnel decisions
+        r"\barrest\b",                   # legal actions
+        r"\bindict\b",                   # legal actions
     ]
 ]
 
