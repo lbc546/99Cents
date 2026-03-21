@@ -636,6 +636,16 @@ class OrderManager:
                           market_id=market_id, token_id=token_id,
                           category=category,
                           details={"response": resp, "attempt": attempt})
+                # Clear cooldown on balance-related failures so the market
+                # can be re-discovered on next poll when funds are available
+                err_lower = error_msg.lower()
+                if any(kw in err_lower for kw in (
+                    "insufficient", "balance", "not enough", "allowance",
+                )):
+                    self._market_order_timestamps.pop(market_id, None)
+                    self._market_order_timestamps.pop(token_id, None)
+                    logger.info("Cleared cooldown for %s (balance issue, will retry on next poll)",
+                                market_id)
                 return False
 
             self._market_order_timestamps[market_id] = time.time()
@@ -676,6 +686,15 @@ class OrderManager:
                       market_id=market_id, token_id=token_id,
                       category=category,
                       details={"error": str(e), "attempt": attempt})
+            # Clear cooldown on balance-related exceptions
+            err_lower = str(e).lower()
+            if any(kw in err_lower for kw in (
+                "insufficient", "balance", "not enough", "allowance",
+            )):
+                self._market_order_timestamps.pop(market_id, None)
+                self._market_order_timestamps.pop(token_id, None)
+                logger.info("Cleared cooldown for %s (balance exception, will retry on next poll)",
+                            market_id)
             return False
 
     # ------------------------------------------------------------------
