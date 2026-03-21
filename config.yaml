@@ -34,7 +34,7 @@ max_retries_on_failure: 1          # Retry once on failed transaction
 retry_delay_seconds: 2             # Wait before retrying a failed order
 
 # --- Timing ---
-polling_interval_seconds: 120      # How often to poll Gamma API for new markets (WS handles real-time)
+polling_interval_seconds: 60       # How often to poll Gamma API for new markets (WS handles real-time)
 redeem_check_interval_seconds: 60  # How often to check for redeemable positions
 ws_ping_interval_seconds: 10       # WebSocket heartbeat interval
 ws_reconnect_base_seconds: 5       # Base delay for WebSocket reconnection backoff
@@ -67,7 +67,7 @@ price_history_window_hours: 2      # Look-back window for surprise pricing check
 gamma_poll_max_pages: 5            # Max pages per Gamma poll cycle (incremental = usually 1-2)
 gamma_poll_limit: 100              # Markets per Gamma API page
 watchlist_scan_interval_seconds: 120   # How often to re-evaluate watchlist entries
-watchlist_recheck_cooldown_seconds: 300  # Skip entries checked less than 5 min ago
+watchlist_recheck_cooldown_seconds: 120  # Skip entries checked less than 2 min ago
 watchlist_max_checks_per_cycle: 10     # Cap Gamma fetches per watchlist scan cycle
 
 # --- Rate Limiting ---
