@@ -85,7 +85,7 @@ stats_log_interval_seconds: 600        # Log daily stats every 10 minutes
 
 # --- Settlement Tracker ---
 ct_framework_address: "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
-rpc_poll_interval_seconds: 30        # On-chain resolution check interval
+rpc_poll_interval_seconds: 180       # On-chain resolution check interval (slow — manual redemption)
 rpc_poll_batch_size: 5               # Max concurrent RPC calls per cycle
 settlement_timeout_hours:
   Crypto: 8                          # Flag Crypto unsettled > 8 hours
