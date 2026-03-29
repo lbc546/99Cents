@@ -268,6 +268,8 @@ _LIVE_EVENT_PATTERNS = [
     re.compile(p, re.IGNORECASE)
     for p in [
         r"^will\b.+\bsay\b",            # "Will X say ..." (any context)
+        r"^will\b.+\bpost\b",           # "Will X post ..." (Truth Social, Twitter, etc.)
+        r"^will\b.+\btweet\b",          # "Will X tweet ..."
         r"\bmention\b",                 # "Will X mention ..." (any context)
         r"\bwear\b.+\bduring\b",        # "Will X wear ... during ..."
         r"\b\d+\s*times?\b.+\bduring\b",  # "... 15 times during ..."
