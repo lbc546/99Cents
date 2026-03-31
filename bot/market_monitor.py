@@ -819,7 +819,7 @@ class MarketMonitor:
         # Weather guard (all sources except gamma_closed): check if it's
         # past 5 PM local time in the market's city. Daily high temps aren't
         # finalized until late afternoon. Uses city-to-timezone mapping.
-        if category == "Science/Weather" and source != "gamma_closed":
+        if category == "Weather" and source != "gamma_closed":
             if not is_weather_temp_known(question):
                 self._log_filtered(market_id, question, category, source,
                                    "weather_before_5pm_local")
@@ -832,7 +832,7 @@ class MarketMonitor:
                 if end_dt:
                     hours_to_end = (end_dt - datetime.now(
                         timezone.utc)).total_seconds() / 3600
-                    if category != "Science/Weather":
+                    if category != "Weather":
                         # Non-weather: endDate within 1 hour
                         if hours_to_end > 1:
                             self._log_filtered(market_id, question, category, source,
@@ -841,7 +841,7 @@ class MarketMonitor:
             except (ValueError, TypeError):
                 pass
             # Non-weather also requires >= 0.99 confidence
-            if category != "Science/Weather" and best_price < 0.99:
+            if category != "Weather" and best_price < 0.99:
                 self._log_filtered(market_id, question, category, source,
                                    "upcoming_low_confidence=%.2f" % best_price)
                 return
@@ -852,7 +852,7 @@ class MarketMonitor:
             # the effective endDate forward by 24 hours for non-weather.
             # Weather markets use their own timezone-aware filter above.
             effective_end_date = end_date
-            if category != "Science/Weather":
+            if category != "Weather":
                 try:
                     end_dt = datetime.fromisoformat(
                         end_date.replace("Z", "+00:00")) if end_date else None
@@ -893,7 +893,7 @@ class MarketMonitor:
         # Weather markets are inherently uncertain before the day ends,
         # so use a much lower cutoff (0.10) to avoid filtering valid trades.
         history = await self._fetch_price_history(winning_token)
-        surprise_cutoff = (0.10 if category == "Science/Weather"
+        surprise_cutoff = (0.10 if category == "Weather"
                            else self.config.surprise_price_cutoff)
         if was_below_threshold_pre_close(
             history, end_date,

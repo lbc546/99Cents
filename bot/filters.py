@@ -170,10 +170,15 @@ def infer_category(question: str) -> str:
         return "Entertainment"
 
     if _word_match(q, [
-        "weather", "temperature", "hurricane", "earthquake",
-        "climate", "nasa", "spacex", "launch",
+        "weather", "temperature",
     ]):
-        return "Science/Weather"
+        return "Weather"
+
+    if _word_match(q, [
+        "hurricane", "earthquake", "climate",
+        "nasa", "spacex", "launch",
+    ]):
+        return "Science"
 
     return "Other"
 
@@ -568,10 +573,15 @@ def check_liquidity_at_threshold(
     return total_usdc, total_usdc >= min_usdc
 
 
-# Category settlement speed scores (from analysis data)
+# Category scores — higher = more attractive
 _CATEGORY_SCORE = {
-    "Crypto": 1.0,    # 3.02h median settlement — best for capital velocity
-    "Esports": 0.8,   # 1.97h median settlement — fastest but lower volume
+    "Weather": 1.0,            # Known outcome by purchase time — highest reliability
+    "Economics/Finance": 0.7,  # Published data — reliable once released
+    "Politics": 0.6,           # Usually clear outcomes, slower resolution
+    "Crypto": 0.5,             # Fast settlement but volatile
+    "Esports": 0.5,            # Fast but blocked
+    "Science": 0.5,            # NASA/SpaceX — varies
+    "Other": 0.4,              # Unknown category — lower priority
 }
 
 

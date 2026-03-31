@@ -46,7 +46,7 @@ class BotConfig:
     watchlist_max_age_hours: int = 48
     end_date_grace_minutes: int = 30
     end_date_grace_by_category: dict = field(default_factory=lambda: {
-        "Crypto": 5, "Economics/Finance": 5, "Science/Weather": 10, "Politics": 30,
+        "Crypto": 5, "Economics/Finance": 5, "Weather": 10, "Science": 10, "Politics": 30,
     })
     price_history_window_hours: int = 2
     gamma_poll_max_pages: int = 5
