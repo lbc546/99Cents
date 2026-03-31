@@ -8,7 +8,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from bot.config import BotConfig
 from bot.logger import log_event
@@ -37,7 +37,7 @@ class DailySummary:
             )
             if tomorrow <= now:
                 # Already past midnight, target next day
-                tomorrow = tomorrow.replace(day=tomorrow.day + 1)
+                tomorrow += timedelta(days=1)
 
             wait_seconds = (tomorrow - now).total_seconds()
             logger.info("Daily summary scheduled in %.0f seconds", wait_seconds)
