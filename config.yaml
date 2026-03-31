@@ -57,13 +57,13 @@ log_level: "INFO"
 
 # --- Scanner / Watchlist ---
 watchlist_max_age_hours: 48        # Drop markets from watchlist after 48 hours unsettled
-end_date_grace_minutes: 30         # Default grace (used for unknown categories)
+end_date_grace_minutes: 60         # Default grace for Other/unknown categories
 end_date_grace_by_category:
   Crypto: 5                        # Price data is instant — 5 min buffer for API lag
   Economics/Finance: 5             # Forex/econ data published at known times
   Weather: 10                      # Weather data may take slightly longer to finalize
   Science: 10                      # NASA/SpaceX launches, earthquakes etc.
-  Politics: 10                     # Most political outcomes are known quickly; 10min buffer
+  Politics: 30                     # Political outcomes can take time to confirm/call
 price_history_window_hours: 2      # Look-back window for surprise pricing check
 gamma_poll_max_pages: 5            # Max pages per Gamma poll cycle (incremental = usually 1-2)
 gamma_poll_limit: 100              # Markets per Gamma API page
