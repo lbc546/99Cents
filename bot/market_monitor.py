@@ -846,10 +846,27 @@ class MarketMonitor:
                                    "upcoming_low_confidence=%.2f" % best_price)
                 return
         if source not in ("gamma_closed", "gamma_upcoming"):
+            # Polymarket endDates are always midnight UTC (00:00:00Z),
+            # meaning "by March 31" → endDate = March 31 00:00Z.
+            # The event actually runs through end of March 31, so shift
+            # the effective endDate forward by 24 hours for non-weather.
+            # Weather markets use their own timezone-aware filter above.
+            effective_end_date = end_date
+            if category != "Science/Weather":
+                try:
+                    end_dt = datetime.fromisoformat(
+                        end_date.replace("Z", "+00:00")) if end_date else None
+                    if end_dt and end_dt.hour == 0 and end_dt.minute == 0:
+                        effective_end_date = (
+                            end_dt + timedelta(hours=24)
+                        ).isoformat()
+                except (ValueError, TypeError):
+                    pass
             grace = self.config.end_date_grace_by_category.get(
                 category, self.config.end_date_grace_minutes
             )
-            timing_ok, timing_reason = check_end_date_timing(end_date, grace)
+            timing_ok, timing_reason = check_end_date_timing(
+                effective_end_date, grace)
             if not timing_ok:
                 self._log_filtered(market_id, question, category, source,
                                    timing_reason)
