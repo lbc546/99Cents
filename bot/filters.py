@@ -289,9 +289,17 @@ _LIVE_EVENT_PATTERNS = [
         r"\bstep\s*down\b",             # personnel decisions
         r"\barrest\b",                   # legal actions
         r"\bindict\b",                   # legal actions
-        # Slow-resolution markets — tie up capital for weeks
-        r"\bstrait of hormuz\b",         # ship transit counts, slow data
-        r"\bships?\s+transit\b",         # ship transit variants
+        r"\bassassinat",                 # assassination
+        r"\bkidnap",                     # kidnapping
+        r"\bbankrupt",                   # bankruptcy filings
+        r"\bdefault\b",                  # debt defaults
+        r"\bcoup\b",                     # coups
+        r"\bshutdown\b",                 # government shutdowns
+        r"\bimpeach",                    # impeachment
+        r"\bpardon\b",                   # presidential pardons
+        r"\bexecut(e|ed|ion)\b",         # executions
+        r"\bdeport",                     # deportations
+        r"\bextraditi",                  # extraditions
     ]
 ]
 
