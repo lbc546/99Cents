@@ -811,6 +811,19 @@ class MarketMonitor:
                                "live_event_market")
             return
 
+        # Step 4c: Election markets with future endDate (election hasn't happened)
+        if "election" in question.lower() and end_date:
+            try:
+                end_dt = datetime.fromisoformat(
+                    end_date.replace("Z", "+00:00"))
+                days_out = (end_dt - datetime.now(timezone.utc)).days
+                if days_out > 30:
+                    self._log_filtered(market_id, question, category, source,
+                                       "election_future_enddate=%dd" % days_out)
+                    return
+            except (ValueError, TypeError):
+                pass
+
         # Step 5: End date timing — category-aware grace period [FREE]
         # gamma_closed: skip timing (oracle already resolved).
         # gamma_upcoming weather: endDate < 4hr (afternoon peak likely passed).
