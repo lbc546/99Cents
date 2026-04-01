@@ -171,7 +171,7 @@ def infer_category(question: str) -> str:
 
     if _word_match(q, [
         "weather", "temperature", "hurricane", "earthquake",
-        "climate", "nasa", "spacex", "launch",
+        "climate", "nasa", "spacex", "rocket launch", "space launch",
     ]):
         return "Science/Weather"
 
