@@ -822,7 +822,7 @@ class MarketMonitor:
         if category == "Science/Weather" and source != "gamma_closed":
             if not is_weather_temp_known(question):
                 self._log_filtered(market_id, question, category, source,
-                                   "weather_before_5pm_local")
+                                   "weather_before_3pm_local")
                 return
 
         if source == "gamma_upcoming":
