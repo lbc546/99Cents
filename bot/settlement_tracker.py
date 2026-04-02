@@ -611,8 +611,8 @@ class SettlementTracker:
                               "Overdue %.1fh + bid=$%.2f ask=$%.2f | %s" % (
                                   hold_hours, best_bid, best_ask, pos.question[:50]),
                               level="WARNING", market_id=pos.market_id)
-                    self.order_manager.place_sell_order(pos.order_id, best_bid)
-                    if self.risk_manager:
+                    sell_id = self.order_manager.place_sell_order(pos.order_id, best_bid)
+                    if sell_id and self.risk_manager:
                         actual_loss = pos.cost - pos.size * best_bid
                         self.risk_manager.record_trade_result(
                             net_profit=-actual_loss, gas_cost=0.0)
@@ -628,8 +628,8 @@ class SettlementTracker:
                               "EMERGENCY bid=$%.2f ask=$%.2f | sell@$%.2f | %s" % (
                                   best_bid, best_ask, sell_price, pos.question[:50]),
                               level="WARNING", market_id=pos.market_id)
-                    self.order_manager.place_sell_order(pos.order_id, sell_price)
-                    if self.risk_manager:
+                    sell_id = self.order_manager.place_sell_order(pos.order_id, sell_price)
+                    if sell_id and self.risk_manager:
                         actual_loss = pos.cost - pos.size * sell_price
                         self.risk_manager.record_trade_result(
                             net_profit=-actual_loss, gas_cost=0.0)
@@ -651,8 +651,8 @@ class SettlementTracker:
                               level="WARNING", market_id=pos.market_id)
 
                     if counts[pos.order_id] >= self.config.cut_loss_confirmations:
-                        self.order_manager.place_sell_order(pos.order_id, 0.70)
-                        if self.risk_manager:
+                        sell_id = self.order_manager.place_sell_order(pos.order_id, 0.70)
+                        if sell_id and self.risk_manager:
                             actual_loss = pos.cost - pos.size * 0.70
                             self.risk_manager.record_trade_result(
                                 net_profit=-actual_loss, gas_cost=0.0)
