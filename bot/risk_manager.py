@@ -245,15 +245,12 @@ class RiskManager:
                       details={"reason": "ws_reconnected"})
 
     def report_dispute(self, market_id: str, question: str = "") -> None:
-        """Dispute detected on an open position. Trip breaker + blacklist."""
-        self._circuit_open = True
-        self._circuit_reason = "dispute_on_position"
-
-        log_event(logger, "CIRCUIT_BREAKER_TRIGGERED",
-                  "Dispute detected — trading paused | %s" % question[:50],
+        """Dispute detected on an open position. Warn + blacklist only."""
+        log_event(logger, "DISPUTE_DETECTED",
+                  "Dispute on held position — blacklisting | %s" % question[:50],
                   level="WARNING",
                   market_id=market_id,
-                  details={"reason": "dispute_on_position"})
+                  details={"market_id": market_id})
 
         asyncio.create_task(
             self.blacklist_market(market_id, "dispute_detected", question, "redeemer")
