@@ -127,6 +127,7 @@ class Redeemer:
                             self.risk_manager.record_trade_result(
                                 net_profit=-pos.cost, gas_cost=0.0)
                             pos.status = "disputed"
+                            self.order_manager._save_positions()
                             continue
 
                     # Verify on-chain resolution before spending gas
