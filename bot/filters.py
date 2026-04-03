@@ -171,7 +171,7 @@ def infer_category(question: str) -> str:
 
     if _word_match(q, [
         "weather", "temperature", "hurricane", "earthquake",
-        "climate", "nasa", "spacex", "rocket launch", "space launch",
+        "climate", "nasa", "rocket launch", "space launch",
     ]):
         return "Science/Weather"
 
@@ -300,6 +300,7 @@ _LIVE_EVENT_PATTERNS = [
         r"\bexecut(e|ed|ion)\b",         # executions
         r"\bdeport",                     # deportations
         r"\bextraditi",                  # extraditions
+        r"\bipo\b",                      # IPO filings — unpredictable timing
     ]
 ]
 
