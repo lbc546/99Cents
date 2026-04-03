@@ -24,9 +24,9 @@ high_confidence_threshold: 0.98    # Pre-resolution: accept leading outcome >= t
 order_type: "GTC"                  # GTC limit orders (not market orders)
 order_ttl_seconds: 300             # Cancel unfilled orders after 5 minutes
 tick_size: "0.01"                  # Minimum price increment
-min_net_profit: 0.30               # Skip if expected net profit below this (USD)
-min_position_size: 35              # Skip if position would be under $35 (need $35 min to clear $0.30 net at $0.99)
-estimated_gas_cost_usd: 0.05       # Estimated Polygon gas cost per transaction in USD
+min_net_profit: 0                  # No minimum — any profit is worth taking
+min_position_size: 0               # No minimum position size
+estimated_gas_cost_usd: 0          # CLOB orders are off-chain, no gas
 platform_fee_rate: 0.0             # Polymarket fee rate (0 for fee-free markets)
 crypto_short_term_fee_rate: 0.0    # 0% maker fee (bot posts GTC limit orders)
 crypto_short_term_price_threshold: 0.99  # Same as normal — maker fee is 0%
