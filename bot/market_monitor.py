@@ -811,15 +811,19 @@ class MarketMonitor:
                                "live_event_market")
             return
 
-        # Step 4c: Election markets with future endDate (election hasn't happened)
-        if "election" in question.lower() and end_date:
+        # Step 4c: Block markets with endDate far in the future.
+        # Settlement arbitrage targets markets that already resolved — endDate
+        # should be in the past or within days.  Markets with endDate >7 days
+        # out are speculative bets (e.g. Somaliland recognition, year-out
+        # elections) and not actionable for our strategy.
+        if end_date:
             try:
                 end_dt = datetime.fromisoformat(
                     end_date.replace("Z", "+00:00"))
                 days_out = (end_dt - datetime.now(timezone.utc)).days
-                if days_out > 30:
+                if days_out > self.config.max_end_date_days:
                     self._log_filtered(market_id, question, category, source,
-                                       "election_future_enddate=%dd" % days_out)
+                                       "future_enddate=%dd" % days_out)
                     return
             except (ValueError, TypeError):
                 pass

@@ -17,6 +17,7 @@ capital_floor: 0                   # Stop trading if Polymarket balance drops be
 # Everything else (Politics, Crypto, Weather, etc.) passes through —
 #   price/liquidity/resolution filters handle the rest.
 blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto"]
+max_end_date_days: 7               # Block markets with endDate more than 7 days out (speculative)
 surprise_price_cutoff: 0.50        # Filter markets that traded below this near close
 high_confidence_threshold: 0.98    # Pre-resolution: accept leading outcome >= this price
 
