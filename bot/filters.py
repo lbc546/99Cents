@@ -280,6 +280,17 @@ _LIVE_EVENT_PATTERNS = [
         r"\bduring\b.+\baddress\b",
         r"\bduring\b.+\brally\b",
         r"\bsay\b.+\bin\s+(a\s+)?tweet\b",  # "Will X say ... in a tweet"
+        # Sports miscategorized as "Other" — tournament endDate ≠ match end
+        r"\bwin the\b.+\b(open|championship|cup|tour|tournament|classic|invitational|memorial|masters)\b",
+        r"\bpga\b",                      # PGA Tour golf
+        r"\bufc\b",                      # UFC fights
+        r"\bko\b.*\btko\b",             # knockout/TKO (MMA/boxing)
+        r"\bsubmission\b",              # MMA
+        r"\bfight\b.+\bdistance\b",     # MMA "go the distance"
+        r"\bround \d+\b",               # boxing/MMA rounds
+        r"\bpenalt(y|ies)\b",           # soccer penalties
+        r"\bovertime\b",                # sports overtime
+        r"\bhalf-time\b",               # sports half-time
         # Pure speculation — unpredictable events with no data edge
         r"\boutage\b",                   # service outages
         r"\bhack(ed)?\b",               # security breaches
