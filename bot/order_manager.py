@@ -789,11 +789,33 @@ class OrderManager:
             from py_clob_client.clob_types import OrderArgs, PartialCreateOrderOptions
             from py_clob_client.order_builder.constants import SELL
 
+            # Query actual token balance to avoid "not enough balance"
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            import math
+            try:
+                ba = client.get_balance_allowance(
+                    BalanceAllowanceParams(
+                        asset_type=AssetType.CONDITIONAL,
+                        token_id=pos.token_id,
+                        signature_type=2,
+                    ))
+                raw = float(ba.get("balance", 0))
+                # Balance is in raw units (1e6); floor to 2 decimals
+                actual_balance = math.floor(raw / 1e6 * 100) / 100
+                logger.info("Token balance for sell: raw=%s actual=%.2f recorded=%.2f | %s",
+                            ba.get("balance"), actual_balance, pos.size, pos.question[:40])
+            except Exception as e:
+                logger.warning("Balance query failed, using recorded size: %s", e)
+                actual_balance = math.floor(pos.size * 100) / 100
+            sell_size = min(actual_balance, pos.size)
+            if sell_size < 0.01:
+                logger.warning("No token balance to sell for %s", pos.question[:50])
+                return None
             resp = client.create_and_post_order(
                 OrderArgs(
                     token_id=pos.token_id,
                     price=sell_price,
-                    size=pos.size,
+                    size=sell_size,
                     side=SELL,
                 ),
                 PartialCreateOrderOptions(

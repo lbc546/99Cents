@@ -669,6 +669,7 @@ class SettlementTracker:
 
         If a sell order was cancelled (manually or by TTL expiry), clear
         cut_loss_order_id so the position becomes eligible for cut-loss again.
+        If price recovered above threshold, cancel the sell order.
         If filled, mark the position as cut_loss.
         """
         pending = [
@@ -682,37 +683,63 @@ class SettlementTracker:
         if client is None and not self.config.dry_run:
             return
 
-        for pos in pending:
-            # Check TTL expiry — cancel and repost
-            elapsed = time.time() - pos.cut_loss_triggered_at
-            if elapsed > self.config.cut_loss_order_ttl:
-                logger.info("Cut-loss sell TTL expired (%.0fs), cancelling: %s",
-                            elapsed, pos.question[:40])
-                self.order_manager.cancel_sell_order(pos.order_id)
-                # Will be re-evaluated in next _check_cut_loss cycle
-                continue
+        async with aiohttp.ClientSession() as session:
+            for pos in pending:
+                # Price recovery check — cancel sell if bid and ask both recovered
+                try:
+                    async with session.get(
+                        "%s/book" % self.config.clob_base_url,
+                        params={"token_id": pos.token_id},
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status == 200:
+                            book = await resp.json()
+                            bids = book.get("bids", [])
+                            asks = book.get("asks", [])
+                            if bids and asks:
+                                best_bid = max(float(b.get("price", 0)) for b in bids)
+                                best_ask = min(float(a.get("price", 1.0)) for a in asks)
+                                if (best_bid > self.config.cut_loss_threshold
+                                        and best_ask > self.config.cut_loss_threshold):
+                                    log_event(logger, "CUTLOSS_RECOVERY",
+                                              "Price recovered bid=$%.2f ask=$%.2f, cancelling sell | %s" % (
+                                                  best_bid, best_ask, pos.question[:50]),
+                                              market_id=pos.market_id)
+                                    self.order_manager.cancel_sell_order(pos.order_id)
+                                    continue
+                except Exception:
+                    pass  # proceed with normal TTL/status checks
 
-            if self.config.dry_run:
-                continue
+                # Check TTL expiry — cancel and repost
+                elapsed = time.time() - pos.cut_loss_triggered_at
+                if elapsed > self.config.cut_loss_order_ttl:
+                    logger.info("Cut-loss sell TTL expired (%.0fs), cancelling: %s",
+                                elapsed, pos.question[:40])
+                    self.order_manager.cancel_sell_order(pos.order_id)
+                    # Will be re-evaluated in next _check_cut_loss cycle
+                    continue
 
-            # Check order status via CLOB API
-            try:
-                order = client.get_order(pos.cut_loss_order_id)
-                status = order.get("status", "").lower() if order else ""
+                if self.config.dry_run:
+                    continue
 
-                if status == "matched":
-                    sell_price = float(order.get("price", 0))
-                    self.order_manager.mark_cut_loss(pos.order_id, sell_price)
-                    logger.info("Cut-loss sell FILLED: %s", pos.question[:40])
-                elif status in ("cancelled", "canceled"):
-                    pos.cut_loss_order_id = ""
-                    pos.cut_loss_triggered_at = 0.0
-                    self.order_manager._save_positions()
-                    logger.info("Cut-loss sell cancelled externally, will retry: %s",
-                                pos.question[:40])
-            except Exception:
-                logger.debug("Failed to check sell order status for %s",
-                             pos.cut_loss_order_id[:16])
+                # Check order status via CLOB API
+                try:
+                    order = client.get_order(pos.cut_loss_order_id)
+                    status = order.get("status", "").lower() if order else ""
+
+                    if status == "matched":
+                        sell_price = float(order.get("price", 0))
+                        self.order_manager.mark_cut_loss(pos.order_id, sell_price)
+                        logger.info("Cut-loss sell FILLED: %s", pos.question[:40])
+                    elif status in ("cancelled", "canceled"):
+                        pos.cut_loss_order_id = ""
+                        pos.cut_loss_triggered_at = 0.0
+                        self.order_manager._save_positions()
+                        logger.info("Cut-loss sell cancelled externally, will retry: %s",
+                                    pos.question[:40])
+                except Exception:
+                    logger.debug("Failed to check sell order status for %s",
+                                 pos.cut_loss_order_id[:16])
 
     # ------------------------------------------------------------------
     # Trade completion logging (called by Redeemer after redemption)
