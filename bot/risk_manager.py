@@ -315,13 +315,18 @@ class RiskManager:
         self._daily_cut_losses = 0
         self._daily_cut_loss_amount = 0.0
 
-        # Re-open circuit breaker if it was tripped by daily loss limit
-        # (disputes and other reasons should persist across days)
-        if self._circuit_open and "daily_loss_limit" in self._circuit_reason:
+        # Reset consecutive failures counter on new day (transient issue)
+        self._consecutive_failures = 0
+
+        # Re-open circuit breaker for recoverable reasons
+        if self._circuit_open and (
+            "daily_loss_limit" in self._circuit_reason
+            or "consecutive_failures" in self._circuit_reason
+        ):
             self._circuit_open = False
             self._circuit_reason = ""
             log_event(logger, "CIRCUIT_BREAKER_RESET",
-                      "Daily loss circuit breaker reset on new day",
+                      "Circuit breaker reset on new day",
                       details={"new_date": today})
 
     def record_opportunity_seen(self) -> None:

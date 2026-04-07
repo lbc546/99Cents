@@ -26,7 +26,7 @@ order_type: "GTC"                  # GTC limit orders (not market orders)
 order_ttl_seconds: 300             # Cancel unfilled orders after 5 minutes
 tick_size: "0.01"                  # Minimum price increment
 min_net_profit: 0                  # No minimum — any profit is worth taking
-min_position_size: 0               # No minimum position size
+min_position_size: 1               # CLOB minimum order size is $1
 estimated_gas_cost_usd: 0          # CLOB orders are off-chain, no gas
 platform_fee_rate: 0.0             # Polymarket fee rate (0 for fee-free markets)
 crypto_short_term_fee_rate: 0.0    # 0% maker fee (bot posts GTC limit orders)
