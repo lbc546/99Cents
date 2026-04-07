@@ -436,8 +436,10 @@ class OrderManager:
 
         # --- Size calculation with partial fill support ---
 
-        # Max shares by capital limit per market
-        max_shares_by_capital = self.config.max_position_per_market / fill_price
+        # Max shares by capital limit per market (category-specific)
+        max_position_usd = self.config.max_position_per_market.get(
+            category, self.config.max_position_per_market.get("default", 50))
+        max_shares_by_capital = max_position_usd / fill_price
 
         # Take whatever is available, up to our max
         # liquidity_usdc is the USDC value of asks at/below threshold

@@ -51,7 +51,8 @@ async def main(config_path: str = "config.yaml"):
     logger.info("=" * 60)
     logger.info("Mode: %s", "DRY RUN (paper trading)" if config.dry_run else "LIVE TRADING")
     logger.info("Price threshold: $%.2f", config.price_threshold)
-    logger.info("Max position/market: $%.0f", config.max_position_per_market)
+    logger.info("Max position/market: %s", ", ".join(
+        "%s=$%.0f" % (k, v) for k, v in config.max_position_per_market.items()))
     logger.info("Max total deployed: $%.0f", config.max_total_deployed)
     logger.info("Max open positions: %d", config.max_open_positions)
     logger.info("Blocked categories: %s", ", ".join(config.blocked_categories))

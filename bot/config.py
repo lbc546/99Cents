@@ -12,7 +12,9 @@ class BotConfig:
 
     # Trading parameters
     price_threshold: float = 0.98
-    max_position_per_market: float = 50.0
+    max_position_per_market: dict = field(default_factory=lambda: {
+        "Science/Weather": 100, "default": 50,
+    })
     max_total_deployed: float = 400.0
     max_open_positions: int = 5
     min_liquidity_usdc: float = 20.0
@@ -166,8 +168,12 @@ def validate_config(config: BotConfig) -> list[str]:
     if not 0.90 <= config.price_threshold <= 0.99:
         errors.append(f"price_threshold must be 0.90-0.99, got {config.price_threshold}")
 
-    if config.max_position_per_market <= 0:
-        errors.append("max_position_per_market must be positive")
+    if not isinstance(config.max_position_per_market, dict):
+        errors.append("max_position_per_market must be a dict (category -> USDC)")
+    elif "default" not in config.max_position_per_market:
+        errors.append("max_position_per_market must have a 'default' key")
+    elif any(v <= 0 for v in config.max_position_per_market.values()):
+        errors.append("max_position_per_market values must be positive")
 
     if config.max_total_deployed <= 0:
         errors.append("max_total_deployed must be positive")
