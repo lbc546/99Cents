@@ -80,6 +80,13 @@ CTF_ABI = [
         "type": "function",
     },
     {
+        "inputs": [{"name": "conditionId", "type": "bytes32"}],
+        "name": "payoutDenominator",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
         "inputs": [
             {"name": "owner", "type": "address"},
             {"name": "id", "type": "uint256"},
@@ -351,42 +358,86 @@ class Redeemer:
         # Backfill neg_risk flag lazily for CLOB-synced or old positions.
         await self._ensure_neg_risk_detected(pos)
 
+        # Backfill outcome_index — we need it both to know if we won and
+        # (for neg-risk) to build the correct amounts array.
+        outcome_index = await self._detect_outcome_index(pos)
+        if outcome_index < 0:
+            logger.warning("Redeemer: cannot determine outcome_index for %s — skipping",
+                           pos.question[:50])
+            self._record_failure(pos.order_id)
+            return
+
         self._check_approvals_once()
 
+        # Did the outcome we bought actually win? If payoutNumerators is 0
+        # for our index, we lost — there's nothing to redeem on-chain. Mark
+        # the position as resolved_loss so it stops blocking redemption
+        # cycles forever, and record the loss.
+        our_payout = await self._get_outcome_payout(pos, outcome_index)
+        if our_payout == 0:
+            log_event(logger, "REDEEM_SKIP_LOSER",
+                      "Outcome %d lost (payout=0): %s" % (
+                          outcome_index, pos.question[:60]),
+                      market_id=pos.market_id,
+                      details={"condition_id": pos.condition_id,
+                               "outcome_index": outcome_index})
+            self.order_manager.mark_resolved_loss(pos.order_id)
+            self._redeem_fail_counts.pop(pos.order_id, None)
+            self._redeem_next_retry.pop(pos.order_id, None)
+            return
+
         if pos.neg_risk:
-            await self._redeem_neg_risk(pos)
+            await self._redeem_neg_risk(pos, outcome_index)
         else:
             await self._redeem_ctf(pos)
 
-    async def _redeem_neg_risk(self, pos):
-        """Build & submit a NegRiskAdapter redemption via the Safe."""
+    async def _redeem_neg_risk(self, pos, outcome_index: int):
+        """Build & submit a NegRiskAdapter redemption via the Safe.
+
+        amounts is a 2-element array [yes_amount, no_amount]; we put our
+        balance at the index of the outcome we actually bought.
+        """
         from web3 import Web3
 
         try:
-            # 1. Query the raw YES-token balance held by the Safe on CTF.
+            # 1. Query the raw token balance held by the Safe on CTF for our token.
             safe_addr = Web3.to_checksum_address(self.config.polymarket_proxy_address)
             token_id_int = int(pos.token_id)
-            yes_balance = await asyncio.to_thread(
+            balance = await asyncio.to_thread(
                 self._ctf.functions.balanceOf(safe_addr, token_id_int).call
             )
-            if yes_balance == 0:
-                logger.info("Redeemer: YES balance is 0 for %s — already redeemed or wrong token",
+            if balance == 0:
+                logger.info("Redeemer: token balance is 0 for %s — already redeemed externally",
                             pos.question[:50])
-                # Let sync_redeemed_positions clean up status
+                self.order_manager.mark_redeemed(pos.order_id)
+                self._redeem_fail_counts.pop(pos.order_id, None)
+                self._redeem_next_retry.pop(pos.order_id, None)
                 return
 
-            # 2. Build NegRiskAdapter.redeemPositions(conditionId, [yes, 0]) calldata.
+            # 2. Build amounts array — balance at our outcome's index.
+            amounts = [0, 0]
+            if 0 <= outcome_index < len(amounts):
+                amounts[outcome_index] = int(balance)
+            else:
+                logger.error("Redeemer: outcome_index %d out of range for %s",
+                             outcome_index, pos.question[:50])
+                self._record_failure(pos.order_id)
+                return
+
             cond_bytes32 = self._to_bytes32(pos.condition_id)
             inner_data = self._neg_risk_adapter.encode_abi(
                 abi_element_identifier="redeemPositions",
-                args=[cond_bytes32, [int(yes_balance), 0]],
+                args=[cond_bytes32, amounts],
             )
 
             # 3. Wrap in Safe.execTransaction and submit.
             target = Web3.to_checksum_address(self.config.neg_risk_adapter_address)
             await self._submit_safe_exec(pos, target, inner_data,
                                          context="neg_risk",
-                                         details={"yes_balance": int(yes_balance)})
+                                         details={
+                                             "balance": int(balance),
+                                             "outcome_index": outcome_index,
+                                         })
         except Exception:
             logger.exception("NegRisk redemption failed for market %s", pos.market_id)
             self._record_failure(pos.order_id)
@@ -554,8 +605,12 @@ class Redeemer:
             logger.debug("neg_risk detection failed for %s: %s", pos.market_id, e)
 
     async def _is_resolved_onchain(self, pos) -> bool:
-        """Check payoutNumerators on CTF. Neg-risk markets return 0 here —
-        that's fine, the fallback Gamma+time path will catch those.
+        """Check payoutDenominator on CTF — non-zero for ANY resolved outcome.
+
+        Previously checked payoutNumerators(cond, 0) > 0 which only detected
+        YES-winners and missed NO-winners entirely (~5/8 of recent positions).
+        payoutDenominator is set in reportPayouts() regardless of which side
+        won, so it's a clean "is this condition resolved" probe.
         """
         if not pos.condition_id:
             logger.info("Redeemer: no condition_id for %s", pos.question[:40])
@@ -567,15 +622,89 @@ class Redeemer:
 
         try:
             cond_bytes32 = self._to_bytes32(pos.condition_id)
-            payout = await asyncio.to_thread(
-                self._ctf.functions.payoutNumerators(cond_bytes32, 0).call
+            denom = await asyncio.to_thread(
+                self._ctf.functions.payoutDenominator(cond_bytes32).call
             )
-            logger.info("payoutNumerators(%s, 0) = %s", pos.condition_id[:18], payout)
-            return payout > 0
+            logger.info("payoutDenominator(%s) = %s",
+                        pos.condition_id[:18], denom)
+            return denom > 0
         except Exception as e:
             logger.warning("On-chain resolution check failed for %s: %s",
                            pos.condition_id[:18], e)
             return False
+
+    async def _detect_outcome_index(self, pos) -> int:
+        """Find which outcome index our token_id corresponds to via Gamma.
+
+        New positions get outcome_index at order time. Old positions and
+        CLOB-synced positions need backfill — query Gamma's clobTokenIds
+        array and match against pos.token_id. Persist on success.
+        Returns -1 if detection fails.
+        """
+        if pos.outcome_index >= 0:
+            return pos.outcome_index
+
+        cond = pos.condition_id or pos.market_id
+        if not cond:
+            return -1
+
+        if cond.startswith("0x"):
+            url = "%s/markets?condition_ids=%s&closed=true" % (
+                self.config.gamma_base_url, cond)
+        else:
+            url = "%s/markets/%s" % (self.config.gamma_base_url, cond)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    if resp.status != 200:
+                        return -1
+                    data = await resp.json()
+                    market = data[0] if isinstance(data, list) and data else data
+                    if not isinstance(market, dict):
+                        return -1
+
+                    raw = market.get("clobTokenIds", "[]")
+                    import json
+                    token_ids = json.loads(raw) if isinstance(raw, str) else raw
+                    if not isinstance(token_ids, list):
+                        return -1
+
+                    target = str(pos.token_id)
+                    for i, tid in enumerate(token_ids):
+                        if str(tid) == target:
+                            pos.outcome_index = i
+                            self.order_manager._save_positions()
+                            logger.info(
+                                "Detected outcome_index=%d for %s (backfilled)",
+                                i, pos.question[:50])
+                            return i
+                    logger.warning(
+                        "outcome_index detection: token %s not in clobTokenIds %s for %s",
+                        target[:16], token_ids, pos.question[:50])
+                    return -1
+        except Exception as e:
+            logger.debug("outcome_index detection failed for %s: %s",
+                         pos.market_id, e)
+            return -1
+
+    async def _get_outcome_payout(self, pos, outcome_index: int) -> int:
+        """Read payoutNumerators for our specific outcome. Returns 0 on error."""
+        self._init_web3()
+        if not self._w3 or not self._ctf or not pos.condition_id:
+            return 0
+        try:
+            cond_bytes32 = self._to_bytes32(pos.condition_id)
+            return await asyncio.to_thread(
+                self._ctf.functions.payoutNumerators(
+                    cond_bytes32, outcome_index).call
+            )
+        except Exception as e:
+            logger.warning("payoutNumerators(%s, %d) failed: %s",
+                           pos.condition_id[:18], outcome_index, e)
+            return 0
 
     async def _is_market_resolved(self, pos) -> bool:
         """Check if the market has actually resolved via Gamma API.

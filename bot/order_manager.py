@@ -39,7 +39,7 @@ class Position:
     gross_profit: float
     gas_cost: float
     net_profit: float
-    status: str  # "pending", "filled", "cancelled", "redeemed", "disputed", "cut_loss"
+    status: str  # "pending", "filled", "cancelled", "redeemed", "disputed", "cut_loss", "resolved_loss"
     placed_at: float
     filled_at: float = 0.0
     source: str = ""
@@ -47,6 +47,7 @@ class Position:
     cut_loss_order_id: str = ""
     cut_loss_triggered_at: float = 0.0
     neg_risk: bool = False  # True for NegRiskAdapter markets — routes redemption accordingly
+    outcome_index: int = -1  # Which outcome we bought (0=YES, 1=NO, etc); -1 = unknown/needs backfill
 
 
 class OrderManager:
@@ -383,6 +384,7 @@ class OrderManager:
         score = opportunity.get("score", 0.0)
         source = opportunity.get("source", "unknown")
         neg_risk = bool(opportunity.get("neg_risk", False))
+        outcome_index = int(opportunity.get("outcome_index", -1))
 
         fill_price = opportunity.get("price_threshold", self.config.price_threshold)
 
@@ -520,6 +522,7 @@ class OrderManager:
             source=source,
             score=score,
             neg_risk=neg_risk,
+            outcome_index=outcome_index,
         )
 
     # ------------------------------------------------------------------
@@ -530,7 +533,8 @@ class OrderManager:
                                        condition_id: str, question: str,
                                        category: str, price: float, size: float,
                                        profit: dict, source: str, score: float,
-                                       neg_risk: bool = False):
+                                       neg_risk: bool = False,
+                                       outcome_index: int = -1):
         """Place order with configurable retry on failure."""
         for attempt in range(1 + self.config.max_retries_on_failure):
             success = await self._place_order(
@@ -546,6 +550,7 @@ class OrderManager:
                 score=score,
                 attempt=attempt,
                 neg_risk=neg_risk,
+                outcome_index=outcome_index,
             )
             if success:
                 if self.risk_manager:
@@ -573,7 +578,8 @@ class OrderManager:
     async def _place_order(self, market_id: str, token_id: str, condition_id: str,
                            question: str, category: str, price: float, size: float,
                            profit: dict, source: str, score: float,
-                           attempt: int = 0, neg_risk: bool = False) -> bool:
+                           attempt: int = 0, neg_risk: bool = False,
+                           outcome_index: int = -1) -> bool:
         """Place a single limit buy order. Returns True on success."""
         cost = size * price
         now = time.time()
@@ -590,6 +596,7 @@ class OrderManager:
                 net_profit=profit["net_profit"],
                 status="filled", placed_at=now, filled_at=now,
                 source=source, score=score, neg_risk=neg_risk,
+                outcome_index=outcome_index,
             )
             self.positions[order_id] = pos
             self._save_positions()
@@ -669,6 +676,7 @@ class OrderManager:
                 placed_at=now,
                 filled_at=now if filled else 0.0,
                 source=source, score=score, neg_risk=neg_risk,
+                outcome_index=outcome_index,
             )
             self.positions[order_id] = pos
             self._save_positions()
@@ -939,6 +947,31 @@ class OrderManager:
         if order_id in self.positions:
             self.positions[order_id].status = "redeemed"
             self._save_positions()
+
+    def mark_resolved_loss(self, order_id: str):
+        """Mark a position as a confirmed loss (the outcome we bought lost).
+
+        The market resolved against us — our shares are worth $0 and there is
+        nothing to redeem on-chain. Record the full cost as a loss and persist.
+        """
+        pos = self.positions.get(order_id)
+        if not pos:
+            return
+        pos.status = "resolved_loss"
+        pos.net_profit = -pos.cost
+        self._save_positions()
+        log_event(logger, "RESOLVED_LOSS",
+                  "Position lost: %s | cost=$%.2f" % (pos.question[:60], pos.cost),
+                  level="WARNING",
+                  market_id=pos.market_id, order_id=order_id,
+                  details={"cost": pos.cost, "outcome_index": pos.outcome_index})
+        if self.risk_manager:
+            try:
+                self.risk_manager.record_trade_result(
+                    net_profit=-pos.cost, gas_cost=0.0,
+                    deployed=self.total_deployed)
+            except Exception:
+                logger.exception("Failed to record loss with risk_manager")
 
     # ------------------------------------------------------------------
     # Summary and reporting

@@ -916,6 +916,7 @@ class MarketMonitor:
             "category": category,
             "winning_outcome": winning_outcome,
             "winning_token_id": winning_token,
+            "outcome_index": int(winning_idx) if winning_idx is not None else -1,
             "condition_id": market.get("conditionId", ""),
             "neg_risk": bool(market.get("negRisk", False)),
             "liquidity_usdc": liquidity_usdc,
