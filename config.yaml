@@ -38,7 +38,7 @@ retry_delay_seconds: 2             # Wait before retrying a failed order
 
 # --- Timing ---
 polling_interval_seconds: 60       # How often to poll Gamma API for new markets (WS handles real-time)
-redeem_check_interval_seconds: 60  # How often to check for redeemable positions
+redeem_check_interval_seconds: 180 # How often to check for redeemable positions (3min — saves RPC)
 ws_ping_interval_seconds: 10       # WebSocket heartbeat interval
 ws_reconnect_base_seconds: 5       # Base delay for WebSocket reconnection backoff
 
@@ -53,6 +53,11 @@ chain_id: 137                      # Polygon mainnet
 polygon_rpc_url: "https://polygon-rpc.com"   # Overridden by POLYGON_RPC_URL env var
 usdc_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 ctf_exchange_address: "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
+neg_risk_adapter_address: "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+
+# --- Redemption (on-chain) ---
+redemption_enabled: true           # Auto-redeem winning shares via Safe.execTransaction
+min_matic_balance: 0.5             # Warn if EOA MATIC balance drops below this
 
 # --- Logging ---
 log_file: "bot.log"

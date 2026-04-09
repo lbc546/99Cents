@@ -73,6 +73,11 @@ class BotConfig:
     polygon_rpc_url: str = "https://polygon-rpc.com"
     usdc_address: str = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     ctf_exchange_address: str = "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
+    neg_risk_adapter_address: str = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+
+    # Redemption (on-chain)
+    redemption_enabled: bool = False
+    min_matic_balance: float = 0.5  # EOA MATIC floor (warn below this)
 
     # Logging
     log_file: str = "bot.log"

@@ -42,6 +42,8 @@ async def run_preflight(config: BotConfig) -> None:
     if not config.dry_run:
         checks.insert(3, ("Polygon RPC", _check_polygon_rpc(config)))
         checks.insert(0, ("Wallet balance", _check_wallet_balance(config)))
+        if config.redemption_enabled:
+            checks.append(("EOA MATIC", _check_eoa_matic(config)))
 
     logger.info("Running %d pre-flight checks...", len(checks))
 
@@ -179,6 +181,37 @@ async def _check_wallet_balance(config: BotConfig) -> str:
                         balance, config.capital_floor)
 
     return "$%.2f on Polymarket" % balance
+
+
+async def _check_eoa_matic(config: BotConfig) -> str:
+    """Check the EOA's native MATIC balance for redemption gas.
+
+    Redemption txs are signed and broadcast by the EOA (which owns the Safe),
+    so the EOA — not the Safe — needs MATIC to pay gas. A redemption costs
+    roughly 0.01-0.05 MATIC on Polygon, so min_matic_balance=0.5 is generous.
+    Below the floor: warn but don't fail (user may top up during the day).
+    """
+    from web3 import Web3
+    from eth_account import Account
+
+    if not config.private_key:
+        raise PreflightError("POLYMARKET_PRIVATE_KEY required for MATIC check")
+
+    w3 = Web3(Web3.HTTPProvider(config.polygon_rpc_url))
+    if not w3.is_connected():
+        raise PreflightError("cannot connect to Polygon RPC")
+
+    acct = Account.from_key(config.private_key)
+    wei = w3.eth.get_balance(acct.address)
+    matic = wei / 1e18
+
+    if matic < config.min_matic_balance:
+        logger.warning(
+            "EOA %s has %.4f MATIC (below floor %.2f) — "
+            "redemptions may fail until refilled",
+            acct.address, matic, config.min_matic_balance)
+
+    return "%.4f MATIC on EOA %s" % (matic, acct.address[:10])
 
 
 async def _check_active_markets(config: BotConfig) -> str:

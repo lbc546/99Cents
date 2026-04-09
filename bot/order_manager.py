@@ -46,6 +46,7 @@ class Position:
     score: float = 0.0
     cut_loss_order_id: str = ""
     cut_loss_triggered_at: float = 0.0
+    neg_risk: bool = False  # True for NegRiskAdapter markets — routes redemption accordingly
 
 
 class OrderManager:
@@ -381,6 +382,7 @@ class OrderManager:
         liquidity_usdc = opportunity.get("liquidity_usdc", 0.0)
         score = opportunity.get("score", 0.0)
         source = opportunity.get("source", "unknown")
+        neg_risk = bool(opportunity.get("neg_risk", False))
 
         fill_price = opportunity.get("price_threshold", self.config.price_threshold)
 
@@ -517,6 +519,7 @@ class OrderManager:
             profit=profit,
             source=source,
             score=score,
+            neg_risk=neg_risk,
         )
 
     # ------------------------------------------------------------------
@@ -526,7 +529,8 @@ class OrderManager:
     async def _place_order_with_retry(self, market_id: str, token_id: str,
                                        condition_id: str, question: str,
                                        category: str, price: float, size: float,
-                                       profit: dict, source: str, score: float):
+                                       profit: dict, source: str, score: float,
+                                       neg_risk: bool = False):
         """Place order with configurable retry on failure."""
         for attempt in range(1 + self.config.max_retries_on_failure):
             success = await self._place_order(
@@ -541,6 +545,7 @@ class OrderManager:
                 source=source,
                 score=score,
                 attempt=attempt,
+                neg_risk=neg_risk,
             )
             if success:
                 if self.risk_manager:
@@ -568,7 +573,7 @@ class OrderManager:
     async def _place_order(self, market_id: str, token_id: str, condition_id: str,
                            question: str, category: str, price: float, size: float,
                            profit: dict, source: str, score: float,
-                           attempt: int = 0) -> bool:
+                           attempt: int = 0, neg_risk: bool = False) -> bool:
         """Place a single limit buy order. Returns True on success."""
         cost = size * price
         now = time.time()
@@ -584,7 +589,7 @@ class OrderManager:
                 gas_cost=profit["gas_cost_usd"],
                 net_profit=profit["net_profit"],
                 status="filled", placed_at=now, filled_at=now,
-                source=source, score=score,
+                source=source, score=score, neg_risk=neg_risk,
             )
             self.positions[order_id] = pos
             self._save_positions()
@@ -663,7 +668,7 @@ class OrderManager:
                 status="filled" if filled else "pending",
                 placed_at=now,
                 filled_at=now if filled else 0.0,
-                source=source, score=score,
+                source=source, score=score, neg_risk=neg_risk,
             )
             self.positions[order_id] = pos
             self._save_positions()

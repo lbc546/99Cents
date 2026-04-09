@@ -1,6 +1,16 @@
-"""On-chain share redemption via web3.py.
+"""On-chain share redemption via Polymarket's Gnosis Safe proxy.
 
-Calls redeemPositions() on the CTF contract to convert winning shares to USDC.e.
+Polymarket wallets (signature_type=2) are 1/1 Gnosis Safe proxies. Our EOA
+is the Safe's only owner but the shares live in the Safe, not the EOA. So we
+can't call redeemPositions() directly — instead we wrap the inner call in
+Safe.execTransaction(...), which the EOA submits as msg.sender.
+
+Routing:
+  - NegRisk markets  -> NegRiskAdapter.redeemPositions(conditionId, [yes, no])
+  - Regular CTF      -> ConditionalTokens.redeemPositions(collat, parent, cond, indexSets)
+
+The pre-validated signature trick (v=1, r=owner, s=0) means we don't need
+EIP-712 signing: the Safe checks msg.sender == owner and accepts it.
 """
 
 import asyncio
@@ -15,8 +25,38 @@ from bot.order_manager import OrderManager
 
 logger = logging.getLogger("arb_bot")
 
-# Minimal ABI for redeemPositions
-CTF_REDEEM_ABI = [
+
+# Gnosis Safe v1.3.0 — only the bits we need
+GNOSIS_SAFE_ABI = [
+    {
+        "inputs": [
+            {"name": "to", "type": "address"},
+            {"name": "value", "type": "uint256"},
+            {"name": "data", "type": "bytes"},
+            {"name": "operation", "type": "uint8"},
+            {"name": "safeTxGas", "type": "uint256"},
+            {"name": "baseGas", "type": "uint256"},
+            {"name": "gasPrice", "type": "uint256"},
+            {"name": "gasToken", "type": "address"},
+            {"name": "refundReceiver", "type": "address"},
+            {"name": "signatures", "type": "bytes"},
+        ],
+        "name": "execTransaction",
+        "outputs": [{"name": "success", "type": "bool"}],
+        "stateMutability": "payable",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "getOwners",
+        "outputs": [{"name": "", "type": "address[]"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+# ConditionalTokens (CTF) — redeem + balance + approval views
+CTF_ABI = [
     {
         "inputs": [
             {"name": "collateralToken", "type": "address"},
@@ -39,11 +79,60 @@ CTF_REDEEM_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [
+            {"name": "owner", "type": "address"},
+            {"name": "id", "type": "uint256"},
+        ],
+        "name": "balanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "owner", "type": "address"},
+            {"name": "operator", "type": "address"},
+        ],
+        "name": "isApprovedForAll",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+# NegRiskAdapter — YES/NO amounts, adapter derives positionIds internally
+NEG_RISK_ADAPTER_ABI = [
+    {
+        "inputs": [
+            {"name": "_conditionId", "type": "bytes32"},
+            {"name": "_amounts", "type": "uint256[]"},
+        ],
+        "name": "redeemPositions",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
 ]
 
 
+def _build_prevalidated_signature(owner_address: str) -> bytes:
+    """Gnosis Safe pre-validated signature used when msg.sender is the owner.
+
+    Format: r (32 bytes = owner address left-padded) + s (32 bytes zero) + v (1 byte = 1).
+    Safe's checkNSignatures accepts v=1 when executor == owner, skipping the hash
+    match. This means we don't need to EIP-712-sign anything when the EOA that
+    owns the Safe is also submitting the tx.
+    """
+    addr_hex = owner_address.lower().replace("0x", "").rjust(40, "0")
+    r = b"\x00" * 12 + bytes.fromhex(addr_hex)  # 12 zero bytes + 20 addr bytes = 32
+    s = b"\x00" * 32
+    v = b"\x01"
+    return r + s + v
+
+
 class Redeemer:
-    """Redeems winning shares on-chain for USDC.e."""
+    """Redeems winning shares on-chain via the Polymarket Safe proxy."""
 
     def __init__(self, config: BotConfig, order_manager: OrderManager):
         self.config = config
@@ -51,13 +140,20 @@ class Redeemer:
         self.risk_manager = None  # Set by main.py
         self.settlement_tracker = None  # Set by main.py
         self._w3 = None
-        self._contract = None
+        self._ctf = None
+        self._neg_risk_adapter = None
+        self._safe = None
         self._account = None
+        self._approval_checked = False
         self._redeem_fail_counts: dict[str, int] = {}  # order_id -> fail count
-        self._redeem_next_retry: dict[str, float] = {}  # order_id -> next retry timestamp
+        self._redeem_next_retry: dict[str, float] = {}  # order_id -> next retry ts
+
+    # ------------------------------------------------------------------
+    # Web3 initialization
+    # ------------------------------------------------------------------
 
     def _init_web3(self):
-        """Lazy-initialize web3 connection."""
+        """Lazy-initialize web3 + contracts. Idempotent."""
         if self._w3 is not None:
             return
 
@@ -66,20 +162,70 @@ class Redeemer:
         self._w3 = Web3(Web3.HTTPProvider(self.config.polygon_rpc_url))
         if not self._w3.is_connected():
             logger.error("Cannot connect to Polygon RPC: %s", self.config.polygon_rpc_url)
+            self._w3 = None
             return
 
-        self._contract = self._w3.eth.contract(
+        self._ctf = self._w3.eth.contract(
             address=Web3.to_checksum_address(self.config.ct_framework_address),
-            abi=CTF_REDEEM_ABI,
+            abi=CTF_ABI,
         )
+        self._neg_risk_adapter = self._w3.eth.contract(
+            address=Web3.to_checksum_address(self.config.neg_risk_adapter_address),
+            abi=NEG_RISK_ADAPTER_ABI,
+        )
+
+        if self.config.polymarket_proxy_address:
+            self._safe = self._w3.eth.contract(
+                address=Web3.to_checksum_address(self.config.polymarket_proxy_address),
+                abi=GNOSIS_SAFE_ABI,
+            )
 
         if self.config.private_key:
             self._account = self._w3.eth.account.from_key(self.config.private_key)
-            logger.info("Web3 initialized, wallet: %s", self._account.address)
+            logger.info("Redeemer web3 ready — EOA=%s safe=%s",
+                        self._account.address,
+                        self.config.polymarket_proxy_address or "<none>")
+
+    def _check_approvals_once(self):
+        """Verify the Safe has approved NegRiskAdapter as a CTF operator.
+
+        Polymarket sets this up during onboarding for neg-risk trading, so it
+        should already be true. We log a clear error if not — redemption will
+        fail until the user approves via the website.
+        """
+        if self._approval_checked:
+            return
+        self._approval_checked = True
+
+        if not self._safe or not self._ctf:
+            return
+
+        try:
+            from web3 import Web3
+            approved = self._ctf.functions.isApprovedForAll(
+                Web3.to_checksum_address(self.config.polymarket_proxy_address),
+                Web3.to_checksum_address(self.config.neg_risk_adapter_address),
+            ).call()
+            if approved:
+                logger.info("Approval OK: Safe -> NegRiskAdapter on CTF")
+            else:
+                logger.error(
+                    "MISSING APPROVAL: Safe has not approved NegRiskAdapter on CTF. "
+                    "Neg-risk redemptions will FAIL. Approve via polymarket.com "
+                    "(trade any neg-risk market once) or disable redemption_enabled."
+                )
+        except Exception as e:
+            logger.warning("Approval check failed (non-fatal): %s", e)
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
 
     async def check_and_redeem_settled(self):
         """Periodically check filled positions and attempt redemption."""
-        logger.info("Redeemer started (interval=%ds)", self.config.redeem_check_interval_seconds)
+        logger.info("Redeemer started (interval=%ds, on_chain=%s)",
+                    self.config.redeem_check_interval_seconds,
+                    self.config.redemption_enabled)
 
         # Wait a bit before first check to let positions accumulate
         await asyncio.sleep(30)
@@ -99,29 +245,27 @@ class Redeemer:
 
                     # FAST PATH: if settlement tracker confirmed resolution
                     # on-chain via payoutNumerators(), skip 2.5hr UMA wait.
-                    # Non-zero payout IS the definitive confirmation.
                     if (self.settlement_tracker
                             and self.settlement_tracker.is_resolution_confirmed(
                                 pos.order_id)):
-                        logger.info("Redeemer FAST PATH: resolution confirmed for %s", pos.question[:40])
-                        await self._redeem(pos.order_id, pos.condition_id,
-                                           pos.market_id, pos.question)
+                        logger.info("Redeemer FAST PATH: resolution confirmed for %s",
+                                    pos.question[:40])
+                        await self._redeem(pos)
                         continue
 
                     # SLOW PATH: wait at least 2.5 hours for UMA challenge
                     hours_since_fill = (time.time() - pos.filled_at) / 3600
                     if hours_since_fill < 2.5:
-                        # Before UMA window: only attempt if market is confirmed resolved
                         if not await self._is_market_resolved(pos):
                             logger.info("Redeemer skip (not resolved, %.1fh old): %s",
                                         hours_since_fill, pos.question[:40])
                             continue
 
-                    # Check for disputes (only after UMA window — empty fields
-                    # are normal during first 2hrs post-resolution)
+                    # Check for disputes (only after UMA window)
                     if self.risk_manager:
                         if await self._check_position_dispute(pos):
-                            logger.warning("Redeemer: DISPUTE detected for %s", pos.question[:40])
+                            logger.warning("Redeemer: DISPUTE detected for %s",
+                                           pos.question[:40])
                             self.risk_manager.report_dispute(
                                 pos.market_id, pos.question)
                             self.risk_manager.record_trade_result(
@@ -130,13 +274,12 @@ class Redeemer:
                             self.order_manager._save_positions()
                             continue
 
-                    # Verify on-chain resolution before spending gas
+                    # Verify on-chain resolution before spending gas. For
+                    # neg-risk markets, payoutNumerators on the base CTF
+                    # returns 0 — fall back to Gamma's "closed" signal plus
+                    # the 2.5hr UMA window.
                     resolved = await self._is_resolved_onchain(pos)
                     if not resolved:
-                        # Fallback: if Gamma confirms market is resolved AND
-                        # position is old enough, attempt redemption anyway.
-                        # NegRisk markets use a different contract for payouts
-                        # so payoutNumerators on CTF returns 0 even when claimable.
                         if hours_since_fill >= 2.5 and await self._is_market_resolved(pos):
                             logger.info("Redeemer: payout=0 but Gamma says resolved, attempting: %s",
                                         pos.question[:40])
@@ -146,9 +289,9 @@ class Redeemer:
                                         pos.question[:40])
                             continue
 
-                    await self._redeem(pos.order_id, pos.condition_id,
-                                       pos.market_id, pos.question)
-                # Also check for positions redeemed externally (e.g. via website)
+                    await self._redeem(pos)
+
+                # Also detect positions redeemed externally (e.g. via website)
                 self.order_manager.sync_redeemed_positions()
                 # Refresh wallet balance to reflect redemptions
                 self.order_manager.sync_wallet_balance()
@@ -157,9 +300,17 @@ class Redeemer:
 
             await asyncio.sleep(self.config.redeem_check_interval_seconds)
 
-    async def _redeem(self, order_id: str, condition_id: str,
-                      market_id: str, question: str):
+    # ------------------------------------------------------------------
+    # Redemption core
+    # ------------------------------------------------------------------
+
+    async def _redeem(self, pos):
         """Redeem winning shares for a single position."""
+        order_id = pos.order_id
+        condition_id = pos.condition_id
+        market_id = pos.market_id
+        question = pos.question
+
         log_event(logger, "REDEEM_STARTED",
                   f"Redeeming shares for: {question[:60]}",
                   market_id=market_id, details={"condition_id": condition_id})
@@ -167,127 +318,260 @@ class Redeemer:
         if self.config.dry_run:
             log_event(logger, "REDEEM_COMPLETE",
                       f"[DRY RUN] Redeemed: {question[:60]}",
-                      market_id=market_id, details={"condition_id": condition_id})
+                      market_id=market_id,
+                      details={"condition_id": condition_id})
             self.order_manager.mark_redeemed(order_id)
-            pos = self.order_manager.positions.get(order_id)
-            if pos:
+            p = self.order_manager.positions.get(order_id)
+            if p:
                 if self.risk_manager:
                     self.risk_manager.record_trade_result(
-                        net_profit=pos.net_profit, gas_cost=pos.gas_cost,
+                        net_profit=p.net_profit, gas_cost=p.gas_cost,
                         deployed=self.order_manager.total_deployed)
                 if self.settlement_tracker:
                     self.settlement_tracker.record_trade_completion(
-                        order_id, pos.gas_cost, time.time())
+                        order_id, p.gas_cost, time.time())
             return
 
-        # On-chain redemption disabled — NegRisk markets use Gnosis Safe
-        # which requires a different contract path. Redeem manually on website.
-        # The sync_redeemed_positions() call below will detect website redemptions.
-        logger.info("Redeemer: on-chain redemption disabled, redeem manually: %s", question[:60])
-        return
+        if not self.config.redemption_enabled:
+            # Manual mode — sync_redeemed_positions() in the main loop
+            # will still detect website redemptions.
+            logger.info("Redeemer: on-chain disabled, redeem manually: %s",
+                        question[:60])
+            return
+
+        if not self.config.polymarket_proxy_address:
+            logger.error("Redeemer: POLYMARKET_PROXY_ADDRESS not set, cannot redeem via Safe")
+            return
 
         self._init_web3()
-        if not self._w3 or not self._account or not self._contract:
-            logger.error("Web3 not initialized, cannot redeem")
+        if not self._w3 or not self._safe or not self._account:
+            logger.error("Redeemer: web3/safe/account not initialized, cannot redeem")
             return
 
-        try:
-            # Convert condition_id to bytes32
-            if condition_id.startswith("0x"):
-                cond_bytes = bytes.fromhex(condition_id[2:])
-            else:
-                cond_bytes = bytes.fromhex(condition_id)
-            cond_bytes32 = cond_bytes.ljust(32, b"\x00")
+        # Backfill neg_risk flag lazily for CLOB-synced or old positions.
+        await self._ensure_neg_risk_detected(pos)
 
+        self._check_approvals_once()
+
+        if pos.neg_risk:
+            await self._redeem_neg_risk(pos)
+        else:
+            await self._redeem_ctf(pos)
+
+    async def _redeem_neg_risk(self, pos):
+        """Build & submit a NegRiskAdapter redemption via the Safe."""
+        from web3 import Web3
+
+        try:
+            # 1. Query the raw YES-token balance held by the Safe on CTF.
+            safe_addr = Web3.to_checksum_address(self.config.polymarket_proxy_address)
+            token_id_int = int(pos.token_id)
+            yes_balance = await asyncio.to_thread(
+                self._ctf.functions.balanceOf(safe_addr, token_id_int).call
+            )
+            if yes_balance == 0:
+                logger.info("Redeemer: YES balance is 0 for %s — already redeemed or wrong token",
+                            pos.question[:50])
+                # Let sync_redeemed_positions clean up status
+                return
+
+            # 2. Build NegRiskAdapter.redeemPositions(conditionId, [yes, 0]) calldata.
+            cond_bytes32 = self._to_bytes32(pos.condition_id)
+            inner_data = self._neg_risk_adapter.encode_abi(
+                abi_element_identifier="redeemPositions",
+                args=[cond_bytes32, [int(yes_balance), 0]],
+            )
+
+            # 3. Wrap in Safe.execTransaction and submit.
+            target = Web3.to_checksum_address(self.config.neg_risk_adapter_address)
+            await self._submit_safe_exec(pos, target, inner_data,
+                                         context="neg_risk",
+                                         details={"yes_balance": int(yes_balance)})
+        except Exception:
+            logger.exception("NegRisk redemption failed for market %s", pos.market_id)
+            self._record_failure(pos.order_id)
+
+    async def _redeem_ctf(self, pos):
+        """Build & submit a plain ConditionalTokens redemption via the Safe."""
+        from web3 import Web3
+
+        try:
+            cond_bytes32 = self._to_bytes32(pos.condition_id)
             parent_collection_id = b"\x00" * 32
 
-            tx = self._contract.functions.redeemPositions(
-                self._w3.to_checksum_address(self.config.usdc_address),
-                parent_collection_id,
-                cond_bytes32,
-                [1, 2],  # redeem both outcome index sets
+            inner_data = self._ctf.encode_abi(
+                abi_element_identifier="redeemPositions",
+                args=[
+                    Web3.to_checksum_address(self.config.usdc_address),
+                    parent_collection_id,
+                    cond_bytes32,
+                    [1, 2],  # YES + NO partition for binary markets
+                ],
+            )
+
+            target = Web3.to_checksum_address(self.config.ct_framework_address)
+            await self._submit_safe_exec(pos, target, inner_data,
+                                         context="ctf",
+                                         details={})
+        except Exception:
+            logger.exception("CTF redemption failed for market %s", pos.market_id)
+            self._record_failure(pos.order_id)
+
+    async def _submit_safe_exec(self, pos, target_address: str,
+                                inner_calldata: str,
+                                context: str, details: dict):
+        """Wrap inner calldata in Safe.execTransaction and send."""
+        from web3 import Web3
+
+        try:
+            signatures = _build_prevalidated_signature(self._account.address)
+            zero_addr = "0x0000000000000000000000000000000000000000"
+
+            tx = self._safe.functions.execTransaction(
+                target_address,
+                0,  # value
+                bytes.fromhex(inner_calldata.replace("0x", "")),
+                0,  # operation = Call
+                0,  # safeTxGas
+                0,  # baseGas
+                0,  # gasPrice (Safe-internal refund accounting, not tx gas)
+                zero_addr,  # gasToken
+                zero_addr,  # refundReceiver
+                signatures,
             ).build_transaction({
                 "from": self._account.address,
-                "gas": 200000,
+                "gas": 600000,  # neg-risk redemption can be ~300-500k
                 "nonce": self._w3.eth.get_transaction_count(self._account.address),
-                "gasPrice": self._w3.eth.gas_price,
+                "gasPrice": int(self._w3.eth.gas_price * 1.1),  # small headroom
             })
 
-            signed_tx = self._w3.eth.account.sign_transaction(tx, self.config.private_key)
+            signed_tx = self._w3.eth.account.sign_transaction(
+                tx, self.config.private_key)
             tx_hash = self._w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            logger.info("Redeemer [%s] tx sent: %s | %s",
+                        context, tx_hash.hex(), pos.question[:50])
 
-            # Wait for confirmation
             receipt = await asyncio.to_thread(
-                self._w3.eth.wait_for_transaction_receipt, tx_hash, timeout=120
+                self._w3.eth.wait_for_transaction_receipt, tx_hash, 180
             )
 
             if receipt["status"] == 1:
-                log_event(logger, "REDEEM_COMPLETE",
-                          f"Redeemed: {question[:60]}",
-                          market_id=market_id, tx_hash=tx_hash.hex(),
-                          details={"gas_used": receipt["gasUsed"]})
-                self.order_manager.mark_redeemed(order_id)
-                self._redeem_fail_counts.pop(order_id, None)
-                self._redeem_next_retry.pop(order_id, None)
-                pos = self.order_manager.positions.get(order_id)
-                # Convert on-chain gas to USD estimate
                 gas_used_matic = (
                     receipt["gasUsed"]
                     * receipt.get("effectiveGasPrice", 0) / 1e18
                 )
                 actual_gas_usd = gas_used_matic * 0.50  # rough MATIC/USD
-                if pos:
+                log_event(logger, "REDEEM_COMPLETE",
+                          f"Redeemed [{context}]: {pos.question[:60]}",
+                          market_id=pos.market_id,
+                          tx_hash=tx_hash.hex(),
+                          details={
+                              "gas_used": receipt["gasUsed"],
+                              "gas_usd": actual_gas_usd,
+                              **details,
+                          })
+                self.order_manager.mark_redeemed(pos.order_id)
+                self._redeem_fail_counts.pop(pos.order_id, None)
+                self._redeem_next_retry.pop(pos.order_id, None)
+                p = self.order_manager.positions.get(pos.order_id)
+                if p:
                     if self.risk_manager:
                         self.risk_manager.record_trade_result(
-                            net_profit=pos.net_profit, gas_cost=actual_gas_usd,
+                            net_profit=p.net_profit, gas_cost=actual_gas_usd,
                             deployed=self.order_manager.total_deployed)
                     if self.settlement_tracker:
                         self.settlement_tracker.record_trade_completion(
-                            order_id, actual_gas_usd, time.time())
+                            pos.order_id, actual_gas_usd, time.time())
             else:
                 log_event(logger, "REDEEM_FAILED",
-                          f"Redemption tx failed: {question[:60]}",
-                          level="ERROR", market_id=market_id, tx_hash=tx_hash.hex())
-                # Exponential backoff: 5min, 10min, 20min, 40min, ... (max 60min)
-                fails = self._redeem_fail_counts.get(order_id, 0) + 1
-                self._redeem_fail_counts[order_id] = fails
-                backoff = min(3600, 300 * (2 ** (fails - 1)))
-                self._redeem_next_retry[order_id] = time.time() + backoff
-                logger.info("Redemption backoff: %s retry in %dm (attempt %d)",
-                            market_id, backoff // 60, fails)
-
+                          f"Safe.execTransaction reverted [{context}]: {pos.question[:60]}",
+                          level="ERROR",
+                          market_id=pos.market_id,
+                          tx_hash=tx_hash.hex())
+                self._record_failure(pos.order_id)
         except Exception:
-            logger.exception("Redemption failed for market %s", market_id)
+            logger.exception("Safe exec failed for market %s (%s)", pos.market_id, context)
+            self._record_failure(pos.order_id)
+
+    def _record_failure(self, order_id: str):
+        """Exponential backoff: 5min, 10min, 20min, 40min, capped at 60min."""
+        fails = self._redeem_fail_counts.get(order_id, 0) + 1
+        self._redeem_fail_counts[order_id] = fails
+        backoff = min(3600, 300 * (2 ** (fails - 1)))
+        self._redeem_next_retry[order_id] = time.time() + backoff
+        logger.info("Redemption backoff: %s retry in %dm (attempt %d)",
+                    order_id[:16], backoff // 60, fails)
+
+    @staticmethod
+    def _to_bytes32(hex_id: str) -> bytes:
+        """Convert a 0x-prefixed hex string to a left-aligned 32-byte value."""
+        raw = hex_id.replace("0x", "")
+        return bytes.fromhex(raw).ljust(32, b"\x00")
+
+    # ------------------------------------------------------------------
+    # Resolution + metadata checks
+    # ------------------------------------------------------------------
+
+    async def _ensure_neg_risk_detected(self, pos):
+        """Fetch Gamma once to populate pos.neg_risk if we don't know it yet.
+
+        New positions get neg_risk set at order time. Old persisted positions
+        and CLOB-synced positions don't — this fills in the gap on first
+        redemption attempt so we route to the right contract.
+        """
+        if pos.neg_risk:
+            return  # already known
+
+        market_id = pos.market_id
+        # Gamma needs `condition_ids=<cid>&closed=true` to return
+        # resolved markets (the default filter excludes closed ones).
+        # By the time we're here, the market has already passed the
+        # resolution check, so closed=true is the right bucket.
+        if market_id.startswith("0x") or pos.condition_id:
+            cond = pos.condition_id or market_id
+            url = "%s/markets?condition_ids=%s&closed=true" % (
+                self.config.gamma_base_url, cond)
+        else:
+            url = "%s/markets/%s" % (self.config.gamma_base_url, market_id)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return
+                    data = await resp.json()
+                    market = data[0] if isinstance(data, list) and data else data
+                    if not isinstance(market, dict):
+                        return
+                    if bool(market.get("negRisk", False)):
+                        pos.neg_risk = True
+                        self.order_manager._save_positions()
+                        logger.info("Detected neg_risk=True for %s (backfilled)",
+                                    pos.question[:50])
+                    else:
+                        logger.info("Detected neg_risk=False for %s", pos.question[:50])
+        except Exception as e:
+            logger.debug("neg_risk detection failed for %s: %s", pos.market_id, e)
 
     async def _is_resolved_onchain(self, pos) -> bool:
-        """Check payoutNumerators on-chain before attempting redemption.
-
-        Returns True only if the condition is confirmed resolved on-chain.
-        This prevents wasting gas on txs that will revert with
-        'result for condition not received yet'.
+        """Check payoutNumerators on CTF. Neg-risk markets return 0 here —
+        that's fine, the fallback Gamma+time path will catch those.
         """
         if not pos.condition_id:
             logger.info("Redeemer: no condition_id for %s", pos.question[:40])
             return False
 
         self._init_web3()
-        if not self._w3 or not self._contract:
-            return False  # Can't check, don't attempt
+        if not self._w3 or not self._ctf:
+            return False
 
         try:
-            cond_hex = pos.condition_id.replace("0x", "")
-            cond_bytes = bytes.fromhex(cond_hex)
-            cond_bytes32 = cond_bytes.ljust(32, b"\x00")
-
-            # payoutNumerators is on the CTF contract
+            cond_bytes32 = self._to_bytes32(pos.condition_id)
             payout = await asyncio.to_thread(
-                self._contract.functions.payoutNumerators(cond_bytes32, 0).call
+                self._ctf.functions.payoutNumerators(cond_bytes32, 0).call
             )
             logger.info("payoutNumerators(%s, 0) = %s", pos.condition_id[:18], payout)
-            if payout > 0:
-                return True
-            logger.info("Redeemer: payout=0 for %s (not resolved yet)", pos.condition_id[:18])
-            return False
+            return payout > 0
         except Exception as e:
             logger.warning("On-chain resolution check failed for %s: %s",
                            pos.condition_id[:18], e)
@@ -296,14 +580,12 @@ class Redeemer:
     async def _is_market_resolved(self, pos) -> bool:
         """Check if the market has actually resolved via Gamma API.
 
-        Returns True if the market is closed/resolved, False if still active.
-        On API errors, returns True to avoid permanently blocking redemptions
-        (the on-chain call will fail gracefully with backoff).
+        On API errors, returns True to avoid blocking redemptions (the
+        on-chain call will fail gracefully with backoff).
         """
-        # CLOB-synced positions use condition_id as market_id — can't query Gamma
         market_id = pos.market_id
         if market_id.startswith("0x"):
-            return True  # Let on-chain call determine if redeemable
+            return True  # CLOB-synced — let on-chain/Gamma-by-cond path decide
 
         url = "%s/markets/%s" % (self.config.gamma_base_url, market_id)
         try:
@@ -312,13 +594,14 @@ class Redeemer:
                     url, timeout=aiohttp.ClientTimeout(total=15)
                 ) as resp:
                     if resp.status != 200:
-                        return True  # Don't block on API errors
+                        return True
                     market = await resp.json()
                     closed = market.get("closed", False)
                     resolved = market.get("resolved", False)
                     if not closed and not resolved:
-                        logger.debug("Market %s not yet resolved, skipping redemption: %s",
-                                     market_id, pos.question[:60])
+                        logger.debug(
+                            "Market %s not yet resolved, skipping redemption: %s",
+                            market_id, pos.question[:60])
                         return False
                     return True
         except Exception:
@@ -327,12 +610,14 @@ class Redeemer:
             return True
 
     async def _check_position_dispute(self, pos) -> bool:
-        """Fetch market detail from Gamma and check for UMA dispute.
-
-        Only called on positions >2.5hrs old — empty dispute fields are
-        normal during the first 2hrs post-resolution (UMA challenge window).
-        """
-        url = "%s/markets/%s" % (self.config.gamma_base_url, pos.market_id)
+        """Fetch market detail from Gamma and check for UMA dispute."""
+        market_id = pos.market_id
+        if market_id.startswith("0x") or pos.condition_id:
+            cond = pos.condition_id or market_id
+            url = "%s/markets?condition_ids=%s&closed=true" % (
+                self.config.gamma_base_url, cond)
+        else:
+            url = "%s/markets/%s" % (self.config.gamma_base_url, market_id)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -340,7 +625,10 @@ class Redeemer:
                 ) as resp:
                     if resp.status != 200:
                         return False
-                    market = await resp.json()
+                    data = await resp.json()
+                    market = data[0] if isinstance(data, list) and data else data
+                    if not isinstance(market, dict):
+                        return False
 
                     if market.get("challenged", False):
                         return True
@@ -350,9 +638,6 @@ class Redeemer:
                         return True
 
                     uma_status = (market.get("umaResolutionStatus") or "").lower()
-                    # Only flag explicit dispute statuses — intermediate
-                    # states like "proposed" are normal UMA resolution flow,
-                    # NOT disputes.
                     if uma_status in ("disputed", "challenged"):
                         return True
         except Exception:
