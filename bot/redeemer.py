@@ -240,8 +240,21 @@ class Redeemer:
         while True:
             try:
                 redeemable = self.order_manager.get_redeemable_positions()
+
+                # Sync manual redemptions every cycle (cheap CLOB calls only
+                # for filled positions). This ensures positions redeemed via
+                # the website get marked correctly even if it's the last one.
                 if redeemable:
-                    logger.info("Redeemer: %d filled positions to check", len(redeemable))
+                    self.order_manager.sync_redeemed_positions()
+                    self.order_manager.sync_wallet_balance()
+                    # Re-check after sync — some may have been redeemed externally
+                    redeemable = self.order_manager.get_redeemable_positions()
+
+                if not redeemable:
+                    await asyncio.sleep(self.config.redeem_check_interval_seconds)
+                    continue
+
+                logger.info("Redeemer: %d filled positions to check", len(redeemable))
 
                 for pos in redeemable:
                     # Skip if in backoff from previous failed attempts
@@ -297,11 +310,6 @@ class Redeemer:
                             continue
 
                     await self._redeem(pos)
-
-                # Also detect positions redeemed externally (e.g. via website)
-                self.order_manager.sync_redeemed_positions()
-                # Refresh wallet balance to reflect redemptions
-                self.order_manager.sync_wallet_balance()
             except Exception:
                 logger.exception("Redemption check error")
 
