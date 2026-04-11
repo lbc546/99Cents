@@ -270,21 +270,89 @@ class OrderManager:
         except Exception as e:
             logger.warning("Failed to sync redeemed positions: %s", e)
 
+    def sync_pending_positions(self):
+        """Verify stale 'pending' orders against CLOB on startup.
+
+        Pending orders that are no longer open on CLOB get marked as
+        cancelled (expired/dead) or filled (matched while bot was down).
+        Without this, stale pending positions inflate total_deployed forever.
+        """
+        try:
+            client = self._get_client()
+            if client is None:
+                return
+
+            pending = [p for p in self.positions.values() if p.status == "pending"]
+            if not pending:
+                logger.info("Pending sync: no pending positions to verify")
+                return
+
+            updated = 0
+            for pos in pending:
+                try:
+                    order = client.get_order(pos.order_id)
+                    status = (order.get("status", "").lower()
+                              if order else "")
+
+                    if status == "matched":
+                        # Order filled while bot was down
+                        pos.status = "filled"
+                        pos.filled_at = time.time()
+                        updated += 1
+                        logger.info(
+                            "Pending→filled (matched on CLOB): %s (market=%s)",
+                            pos.question[:60], pos.market_id,
+                        )
+                    elif status in ("cancelled", "canceled", "expired", ""):
+                        # Order dead — free up the capital
+                        pos.status = "cancelled"
+                        updated += 1
+                        logger.info(
+                            "Pending→cancelled (status=%s on CLOB): %s (market=%s)",
+                            status or "not_found", pos.question[:60], pos.market_id,
+                        )
+                    # "live" or "open" → still pending, leave as-is
+                except Exception as e:
+                    logger.debug("Failed to check pending order %s: %s",
+                                 pos.order_id[:16], e)
+
+            if updated:
+                self._save_positions()
+                logger.info("Pending sync: updated %d/%d pending positions",
+                            updated, len(pending))
+            else:
+                logger.info("Pending sync: all %d pending positions still open",
+                            len(pending))
+
+        except Exception as e:
+            logger.warning("Failed to sync pending positions: %s", e)
+
     def _load_positions(self):
-        """Load persisted positions from disk."""
+        """Load persisted positions from disk, pruning old completed ones."""
         import json, os
         if not os.path.exists(self.POSITIONS_FILE):
             return
         try:
             with open(self.POSITIONS_FILE, "r") as f:
                 data = json.load(f)
+            cutoff = time.time() - 7 * 86400  # 7 days
+            pruned = 0
             for order_id, fields in data.items():
                 # Backfill condition_id for CLOB-synced positions
                 if not fields.get("condition_id") and fields.get("market_id", "").startswith("0x"):
                     fields["condition_id"] = fields["market_id"]
-                self.positions[order_id] = Position(**fields)
+                pos = Position(**fields)
+                # Prune completed positions older than 7 days
+                if (pos.status not in ("pending", "filled")
+                        and pos.filled_at and pos.filled_at < cutoff):
+                    pruned += 1
+                    continue
+                self.positions[order_id] = pos
             active = sum(1 for p in self.positions.values() if p.status in ("pending", "filled"))
-            logger.info("Loaded %d positions from disk (%d active)", len(self.positions), active)
+            logger.info("Loaded %d positions from disk (%d active, %d pruned)",
+                        len(self.positions), active, pruned)
+            if pruned:
+                self._save_positions()
         except Exception as e:
             logger.warning("Failed to load positions: %s", e)
 
@@ -314,13 +382,12 @@ class OrderManager:
 
     @property
     def available_capital(self) -> float:
-        # Trust wallet balance as source of truth when available.
-        # Internal total_deployed drifts when positions are redeemed
-        # on-chain but not yet updated in bot state.
-        if self._wallet_balance is not None:
-            return max(self._wallet_balance, 0)
-        # Fallback to policy limit if wallet balance unknown
+        # Policy limit: how much more we're allowed to deploy
         cap = self.config.max_total_deployed - self.total_deployed
+        # Also cap by actual wallet USDC (prevents over-deploying when
+        # policy says OK but wallet is low due to un-redeemed tokens)
+        if self._wallet_balance is not None:
+            cap = min(cap, self._wallet_balance)
         return max(cap, 0)
 
     def _has_position_in_market(self, market_id: str, condition_id: str = "",
@@ -717,6 +784,25 @@ class OrderManager:
     # ------------------------------------------------------------------
     # Order monitoring and cancellation
     # ------------------------------------------------------------------
+
+    async def run_periodic_sync(self):
+        """Periodically sync wallet balance and detect external redemptions.
+
+        Runs independently of the redeemer so that total_deployed and
+        available_capital stay accurate even between redeemer cycles.
+        """
+        logger.info("Periodic sync started (interval=%ds)",
+                     self.config.redeem_check_interval_seconds)
+        while True:
+            await asyncio.sleep(self.config.redeem_check_interval_seconds)
+            try:
+                self.sync_redeemed_positions()
+                self.sync_wallet_balance()
+                logger.info("Periodic sync: deployed=$%.2f available=$%.2f open=%d",
+                            self.total_deployed, self.available_capital,
+                            self.open_position_count)
+            except Exception as e:
+                logger.warning("Periodic sync failed: %s", e)
 
     async def monitor_open_orders(self):
         """Periodically check and cancel expired unfilled orders."""

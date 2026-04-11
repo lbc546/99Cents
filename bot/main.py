@@ -77,6 +77,7 @@ async def main(config_path: str = "config.yaml"):
     order_mgr = OrderManager(config)
     order_mgr.sync_wallet_balance()
     order_mgr.sync_open_positions()
+    order_mgr.sync_pending_positions()
     order_mgr.sync_redeemed_positions()
     redeemer = Redeemer(config, order_mgr)
     monitor = MarketMonitor(config, on_opportunity=order_mgr.handle_opportunity)
@@ -135,6 +136,7 @@ async def main(config_path: str = "config.yaml"):
         asyncio.create_task(monitor.run_websocket(), name="websocket"),
         asyncio.create_task(monitor.run_watchlist_scanner(), name="watchlist_scanner"),
         asyncio.create_task(order_mgr.monitor_open_orders(), name="order_monitor"),
+        asyncio.create_task(order_mgr.run_periodic_sync(), name="position_sync"),
         asyncio.create_task(redeemer.check_and_redeem_settled(), name="redeemer"),
         asyncio.create_task(risk_mgr.run_periodic_stats(order_mgr.get_summary), name="risk_stats"),
         asyncio.create_task(tracker.run_rpc_resolution_monitor(), name="rpc_resolution_monitor"),
