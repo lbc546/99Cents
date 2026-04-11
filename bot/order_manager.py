@@ -314,11 +314,13 @@ class OrderManager:
 
     @property
     def available_capital(self) -> float:
-        # How much more we're allowed to deploy (policy limit)
-        cap = self.config.max_total_deployed - self.total_deployed
-        # Don't deploy more than what's actually in the wallet
+        # Trust wallet balance as source of truth when available.
+        # Internal total_deployed drifts when positions are redeemed
+        # on-chain but not yet updated in bot state.
         if self._wallet_balance is not None:
-            cap = min(cap, self._wallet_balance)
+            return max(self._wallet_balance, 0)
+        # Fallback to policy limit if wallet balance unknown
+        cap = self.config.max_total_deployed - self.total_deployed
         return max(cap, 0)
 
     def _has_position_in_market(self, market_id: str, condition_id: str = "",
