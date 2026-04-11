@@ -369,22 +369,26 @@ class Redeemer:
 
         self._check_approvals_once()
 
-        # Did the outcome we bought actually win? If payoutNumerators is 0
-        # for our index, we lost — there's nothing to redeem on-chain. Mark
-        # the position as resolved_loss so it stops blocking redemption
-        # cycles forever, and record the loss.
-        our_payout = await self._get_outcome_payout(pos, outcome_index)
-        if our_payout == 0:
-            log_event(logger, "REDEEM_SKIP_LOSER",
-                      "Outcome %d lost (payout=0): %s" % (
-                          outcome_index, pos.question[:60]),
-                      market_id=pos.market_id,
-                      details={"condition_id": pos.condition_id,
-                               "outcome_index": outcome_index})
-            self.order_manager.mark_resolved_loss(pos.order_id)
-            self._redeem_fail_counts.pop(pos.order_id, None)
-            self._redeem_next_retry.pop(pos.order_id, None)
-            return
+        # Did the outcome we bought actually win? For non-neg-risk markets,
+        # check payoutNumerators directly — it's authoritative on the base CTF.
+        # For neg-risk markets, the base CTF often has payout=0 even for
+        # winners (the NegRiskAdapter resolves internally via UMA, not via
+        # CTF.reportPayouts). So for neg-risk we skip the payout check and
+        # just attempt redemption — the adapter will revert if we're wrong,
+        # and we'll backoff gracefully.
+        if not pos.neg_risk:
+            our_payout = await self._get_outcome_payout(pos, outcome_index)
+            if our_payout == 0:
+                log_event(logger, "REDEEM_SKIP_LOSER",
+                          "Outcome %d lost (payout=0): %s" % (
+                              outcome_index, pos.question[:60]),
+                          market_id=pos.market_id,
+                          details={"condition_id": pos.condition_id,
+                                   "outcome_index": outcome_index})
+                self.order_manager.mark_resolved_loss(pos.order_id)
+                self._redeem_fail_counts.pop(pos.order_id, None)
+                self._redeem_next_retry.pop(pos.order_id, None)
+                return
 
         if pos.neg_risk:
             await self._redeem_neg_risk(pos, outcome_index)
@@ -545,13 +549,30 @@ class Redeemer:
             self._record_failure(pos.order_id)
 
     def _record_failure(self, order_id: str):
-        """Exponential backoff: 5min, 10min, 20min, 40min, capped at 60min."""
+        """Exponential backoff: 5min, 10min, 20min, 40min, capped at 60min.
+
+        For neg-risk positions, 3 consecutive on-chain reverts strongly
+        suggests the outcome we bought lost (the NegRiskAdapter rejects
+        redemption for losing outcomes). Mark as resolved_loss to stop
+        burning gas retrying.
+        """
         fails = self._redeem_fail_counts.get(order_id, 0) + 1
         self._redeem_fail_counts[order_id] = fails
         backoff = min(3600, 300 * (2 ** (fails - 1)))
         self._redeem_next_retry[order_id] = time.time() + backoff
         logger.info("Redemption backoff: %s retry in %dm (attempt %d)",
                     order_id[:16], backoff // 60, fails)
+
+        # After 3 on-chain failures on a neg-risk position, assume it's a loss
+        if fails >= 3:
+            pos = self.order_manager.positions.get(order_id)
+            if pos and pos.neg_risk:
+                logger.warning(
+                    "Marking neg-risk position as resolved_loss after %d failures: %s",
+                    fails, pos.question[:50])
+                self.order_manager.mark_resolved_loss(order_id)
+                self._redeem_fail_counts.pop(order_id, None)
+                self._redeem_next_retry.pop(order_id, None)
 
     @staticmethod
     def _to_bytes32(hex_id: str) -> bytes:
@@ -709,6 +730,11 @@ class Redeemer:
     async def _is_market_resolved(self, pos) -> bool:
         """Check if the market has actually resolved via Gamma API.
 
+        Tries two approaches:
+          1. By market_id (Gamma numeric slug) — works for non-neg-risk
+          2. By condition_ids with closed=true — works for neg-risk sub-markets
+             where the individual market endpoint may not reflect resolution
+
         On API errors, returns True to avoid blocking redemptions (the
         on-chain call will fail gracefully with backoff).
         """
@@ -716,27 +742,41 @@ class Redeemer:
         if market_id.startswith("0x"):
             return True  # CLOB-synced — let on-chain/Gamma-by-cond path decide
 
+        # Approach 1: query by market_id
         url = "%s/markets/%s" % (self.config.gamma_base_url, market_id)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     url, timeout=aiohttp.ClientTimeout(total=15)
                 ) as resp:
-                    if resp.status != 200:
-                        return True
-                    market = await resp.json()
-                    closed = market.get("closed", False)
-                    resolved = market.get("resolved", False)
-                    if not closed and not resolved:
-                        logger.debug(
-                            "Market %s not yet resolved, skipping redemption: %s",
-                            market_id, pos.question[:60])
-                        return False
-                    return True
+                    if resp.status == 200:
+                        market = await resp.json()
+                        if market.get("closed", False) or market.get("resolved", False):
+                            return True
         except Exception:
-            logger.debug("Resolution check failed for %s, allowing redemption attempt",
-                         market_id)
-            return True
+            pass
+
+        # Approach 2: query by condition_ids (catches neg-risk sub-markets)
+        cond = pos.condition_id
+        if cond:
+            url2 = "%s/markets?condition_ids=%s&closed=true" % (
+                self.config.gamma_base_url, cond)
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        url2, timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if isinstance(data, list) and len(data) > 0:
+                                logger.info("Gamma resolved (by condition_id): %s",
+                                            pos.question[:50])
+                                return True
+            except Exception:
+                pass
+
+        logger.debug("Market %s not yet resolved: %s", market_id, pos.question[:60])
+        return False
 
     async def _check_position_dispute(self, pos) -> bool:
         """Fetch market detail from Gamma and check for UMA dispute."""
