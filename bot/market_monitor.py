@@ -189,6 +189,7 @@ class MarketMonitor:
             try:
                 await self._poll_gamma_active()
                 await self._poll_gamma_upcoming()
+                await self._poll_gamma_events()
                 await self._poll_gamma_closed()
             except Exception:
                 logger.exception("Gamma poll error")
@@ -305,6 +306,77 @@ class MarketMonitor:
         if new_count:
             logger.info("Gamma upcoming poll: %d markets closing within 12h (pages=%d)",
                          new_count, pages_fetched + 1)
+
+    async def _poll_gamma_events(self):
+        """Fetch neg-risk multi-outcome events from /events endpoint.
+
+        Weather temperature markets (and other neg-risk events) are NOT
+        returned by the /markets list endpoint. They only appear as
+        sub-markets nested under /events. This poller paginates through
+        active events, extracts sub-markets, and feeds them into the
+        normal evaluation pipeline.
+        """
+        url = f"{self.config.gamma_base_url}/events"
+        new_count = 0
+
+        now = datetime.now(timezone.utc)
+        window_start = (now - timedelta(hours=self.config.watchlist_max_age_hours)).isoformat()
+        window_end = (now + timedelta(hours=12)).isoformat()
+
+        # Weather events are deep in pagination (offset 300+), so we
+        # need to scan broadly. Cap at 10 pages to limit API usage.
+        max_pages = 10
+
+        for page in range(max_pages):
+            offset = page * self.config.gamma_poll_limit
+            params = {
+                "active": "true",
+                "closed": "false",
+                "limit": self.config.gamma_poll_limit,
+                "offset": offset,
+                "end_date_min": window_start,
+                "end_date_max": window_end,
+            }
+
+            events = await self._rate_limited_gamma_get(url, params)
+            if not events:
+                break
+
+            for event in events:
+                event_id = str(event.get("id", ""))
+                markets = event.get("markets")
+                if not isinstance(markets, list) or not markets:
+                    continue
+
+                # Only process events whose sub-markets are neg-risk
+                # (these are the ones missing from /markets endpoint)
+                first_market = markets[0]
+                if not isinstance(first_market, dict):
+                    continue
+                if not first_market.get("negRisk"):
+                    continue
+
+                for market in markets:
+                    market_id = str(market.get("id", ""))
+                    if market_id in self._seen_market_ids:
+                        continue
+                    self._seen_market_ids.add(market_id)
+
+                    question = market.get("question", "")
+                    category = infer_category(question)
+                    if category in self.config.blocked_categories:
+                        continue
+
+                    new_count += 1
+                    self._add_to_watchlist(market)
+                    await self._evaluate_market(market, source="gamma_events")
+
+            if len(events) < self.config.gamma_poll_limit:
+                break
+
+        if new_count:
+            logger.info("Gamma events poll: %d new neg-risk sub-markets (pages=%d)",
+                         new_count, page + 1)
 
     async def _poll_gamma_closed(self):
         """Fetch recently closed markets (already resolved by oracle).
