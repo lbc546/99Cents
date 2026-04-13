@@ -7,7 +7,7 @@ max_position_per_market:           # Max USDC per single market, by category
   Science/Weather: 100             # Higher cap for high-confidence weather markets
   default: 50                      # All other categories
 max_total_deployed: 1500            # Max USDC deployed across all positions
-max_open_positions: 20             # Max concurrent open positions
+max_open_positions: 100             # Max concurrent open positions
 min_liquidity_usdc: 20             # Min USDC of liquidity available at threshold price
 capital_floor: 0                   # Stop trading if Polymarket balance drops below this (minimum reserve)
 
