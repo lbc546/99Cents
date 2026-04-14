@@ -55,6 +55,8 @@ async def main(config_path: str = "config.yaml"):
         "%s=$%.0f" % (k, v) for k, v in config.max_position_per_market.items()))
     logger.info("Max total deployed: $%.0f", config.max_total_deployed)
     logger.info("Max open positions: %d", config.max_open_positions)
+    logger.info("Max positions/category: %s", ", ".join(
+        "%s=%d" % (k, v) for k, v in config.max_positions_per_category.items()))
     logger.info("Blocked categories: %s", ", ".join(config.blocked_categories))
     logger.info("Order TTL: %ds", config.order_ttl_seconds)
     logger.info("Gamma poll interval: %ds", config.polling_interval_seconds)

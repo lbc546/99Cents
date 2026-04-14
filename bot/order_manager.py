@@ -481,6 +481,16 @@ class OrderManager:
                            "max_positions_reached=%d" % self.config.max_open_positions)
             return
 
+        # 1b. Per-category position cap
+        cat_limit = self.config.max_positions_per_category.get(category)
+        if cat_limit is not None:
+            cat_count = sum(1 for p in self.positions.values()
+                           if p.status in ("pending", "filled") and p.category == category)
+            if cat_count >= cat_limit:
+                self._log_skip(market_id, token_id, question, category,
+                               "category_limit=%d/%d" % (cat_count, cat_limit))
+                return
+
         # 2a. Per-market cooldown (prevents duplicate orders from delayed responses)
         now = time.time()
         last_by_market = self._market_order_timestamps.get(market_id, 0)

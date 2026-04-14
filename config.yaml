@@ -113,6 +113,13 @@ cut_loss_min_bid_depth: 10.0         # Min bid depth in USDC (filters thin books
 cut_loss_order_ttl: 120              # Sell order TTL before cancel/repost (seconds)
 cut_loss_overdue_threshold: 0.90     # Lower bar for overdue positions (bid+ask both below)
 
+# --- Category Position Limits ---
+max_positions_per_category:
+  Politics: 3                        # Elections/approval ratings — slow resolution (days/weeks)
+  Economics/Finance: 3               # Unemployment, GDP — slow resolution
+  Other: 5                           # Mixed bag, moderate cap
+  # Science/Weather and Crypto: no limit (same-day resolution)
+
 # --- Dashboard ---
 dashboard_enabled: false              # Enable rich terminal dashboard
 dashboard_refresh_seconds: 5         # Dashboard refresh interval

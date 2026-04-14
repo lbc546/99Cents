@@ -113,6 +113,11 @@ class BotConfig:
     cut_loss_order_ttl: int = 120
     cut_loss_overdue_threshold: float = 0.90
 
+    # Category position limits (slow-resolution categories)
+    max_positions_per_category: dict = field(default_factory=lambda: {
+        "Politics": 3, "Economics/Finance": 3, "Other": 5,
+    })
+
     # Dashboard
     dashboard_enabled: bool = False
     dashboard_refresh_seconds: int = 5
