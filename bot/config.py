@@ -49,6 +49,7 @@ class BotConfig:
     end_date_grace_minutes: int = 30
     end_date_grace_by_category: dict = field(default_factory=lambda: {
         "Crypto": 5, "Economics/Finance": 5, "Science/Weather": 10, "Politics": 30,
+        "Other": 180,
     })
     max_end_date_days: int = 7
     price_history_window_hours: int = 2

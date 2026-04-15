@@ -71,6 +71,7 @@ end_date_grace_by_category:
   Economics/Finance: 5             # Forex/econ data published at known times
   Science/Weather: 10              # Weather data may take slightly longer to finalize
   Politics: 10                     # Most political outcomes are known quickly; 10min buffer
+  Other: 180                       # 3 hours — no reliable resolution source, wait for on-chain
 price_history_window_hours: 2      # Look-back window for surprise pricing check
 gamma_poll_max_pages: 5            # Max pages per Gamma poll cycle (incremental = usually 1-2)
 gamma_poll_limit: 100              # Markets per Gamma API page
