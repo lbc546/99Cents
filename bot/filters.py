@@ -166,6 +166,9 @@ def infer_category(question: str) -> str:
         "oscar", "grammy", "emmy", "movie", "album",
         "celebrity", "taylor swift", "kanye", "elon musk",
         "twitter", "tiktok", "youtube",
+        "love is blind", "bachelor", "bachelorette", "survivor",
+        "big brother", "reality tv", "engaged on",
+        "eliminated", "rose ceremony", "tribal council",
     ]):
         return "Entertainment"
 
