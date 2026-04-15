@@ -115,7 +115,7 @@ cut_loss_overdue_threshold: 0.90     # Lower bar for overdue positions (bid+ask 
 
 # --- Category Position Limits ---
 max_positions_per_category:
-  Politics: 3                        # Elections/approval ratings — slow resolution (days/weeks)
+  Politics: 5                        # Elections/approval ratings — slow resolution (days/weeks)
   Economics/Finance: 3               # Unemployment, GDP — slow resolution
   Other: 5                           # Mixed bag, moderate cap
   # Science/Weather and Crypto: no limit (same-day resolution)

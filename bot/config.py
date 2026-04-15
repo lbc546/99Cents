@@ -115,7 +115,7 @@ class BotConfig:
 
     # Category position limits (slow-resolution categories)
     max_positions_per_category: dict = field(default_factory=lambda: {
-        "Politics": 3, "Economics/Finance": 3, "Other": 5,
+        "Politics": 5, "Economics/Finance": 3, "Other": 5,
     })
 
     # Dashboard
