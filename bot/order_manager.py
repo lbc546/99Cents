@@ -276,6 +276,10 @@ class OrderManager:
         Pending orders that are no longer open on CLOB get marked as
         cancelled (expired/dead) or filled (matched while bot was down).
         Without this, stale pending positions inflate total_deployed forever.
+
+        Also recovers 'cancelled' positions that actually filled — the cancel
+        logic may have raced with a fill, leaving shares in the wallet but
+        the position marked cancelled.
         """
         try:
             client = self._get_client()
@@ -285,7 +289,6 @@ class OrderManager:
             pending = [p for p in self.positions.values() if p.status == "pending"]
             if not pending:
                 logger.info("Pending sync: no pending positions to verify")
-                return
 
             updated = 0
             for pos in pending:
@@ -316,13 +319,30 @@ class OrderManager:
                     logger.debug("Failed to check pending order %s: %s",
                                  pos.order_id[:16], e)
 
+            # Recover cancelled positions that actually filled (race between
+            # TTL cancel and CLOB matching).
+            cancelled = [p for p in self.positions.values() if p.status == "cancelled"]
+            for pos in cancelled:
+                try:
+                    order = client.get_order(pos.order_id)
+                    status = (order.get("status", "").lower()
+                              if order else "")
+                    if status == "matched":
+                        pos.status = "filled"
+                        pos.filled_at = time.time()
+                        updated += 1
+                        logger.info(
+                            "Cancelled→filled (matched on CLOB): %s (market=%s)",
+                            pos.question[:60], pos.market_id,
+                        )
+                except Exception as e:
+                    logger.debug("Failed to check cancelled order %s: %s",
+                                 pos.order_id[:16], e)
+
             if updated:
                 self._save_positions()
-                logger.info("Pending sync: updated %d/%d pending positions",
-                            updated, len(pending))
-            else:
-                logger.info("Pending sync: all %d pending positions still open",
-                            len(pending))
+                logger.info("Position sync: updated %d positions",
+                            updated)
 
         except Exception as e:
             logger.warning("Failed to sync pending positions: %s", e)
@@ -855,6 +875,23 @@ class OrderManager:
             return
 
         try:
+            # Check if order already filled before cancelling — the CLOB may
+            # have matched it between our last check and now.
+            try:
+                order = client.get_order(order_id)
+                status = (order.get("status", "").lower() if order else "")
+                if status == "matched":
+                    pos.status = "filled"
+                    pos.filled_at = time.time()
+                    self._save_positions()
+                    log_event(logger, "ORDER_FILLED",
+                              "Order filled (caught at cancel): %s | %s" % (
+                                  order_id, pos.question[:50]),
+                              market_id=pos.market_id, order_id=order_id)
+                    return
+            except Exception:
+                pass  # If check fails, proceed with cancel attempt
+
             client.cancel(order_id)
             pos.status = "cancelled"
             self._save_positions()
