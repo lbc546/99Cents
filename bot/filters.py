@@ -85,8 +85,62 @@ def _is_sports_pattern(q: str) -> bool:
     return any(p.search(q) for p in _SPORTS_PATTERNS)
 
 
-def infer_category(question: str) -> str:
-    """Infer market category from question text."""
+def _extract_tags(tags) -> set:
+    """Extract lowercase label set from Gamma tags list."""
+    if not tags or not isinstance(tags, list):
+        return set()
+    return {t.get("label", "").lower() for t in tags if isinstance(t, dict)}
+
+
+def get_market_tags(market: dict):
+    """Extract Gamma tags from a market dict.
+
+    Tags live at the event level, not the market level. They may be
+    present as ``market["_event_tags"]`` (attached by the events poller)
+    or nested inside ``market["events"][0]["tags"]`` (some Gamma
+    endpoints embed the parent event).  Returns the tags list or None.
+    """
+    tags = market.get("_event_tags")
+    if tags:
+        return tags
+    evts = market.get("events")
+    if isinstance(evts, list) and evts:
+        tags = evts[0].get("tags") if isinstance(evts[0], dict) else None
+    return tags
+
+
+def infer_category(question: str, tags=None) -> str:
+    """Infer market category from Gamma tags (if available) or question text.
+
+    Gamma events carry a ``tags`` list of dicts with a ``label`` key
+    (e.g. "Sports", "Golf", "PGA").  When present these are checked
+    first; keyword matching on the question is the fallback.
+    """
+    # --- Gamma tags (authoritative when available) ---
+    tag_labels = _extract_tags(tags)
+    if tag_labels:
+        if tag_labels & {"sports", "golf", "pga", "pga tour", "tennis",
+                         "nba", "nfl", "nhl", "mlb", "ufc", "mma",
+                         "boxing", "cricket", "f1", "formula 1",
+                         "nascar", "rugby", "cycling", "soccer",
+                         "football", "baseball", "basketball", "hockey"}:
+            return "Sports"
+        if tag_labels & {"esports", "dota", "counter-strike", "cs2",
+                         "league of legends", "valorant"}:
+            return "Esports"
+        if tag_labels & {"entertainment", "tv", "movies", "music",
+                         "reality tv", "celebrity"}:
+            return "Entertainment"
+        if tag_labels & {"crypto", "bitcoin", "ethereum"}:
+            return "Crypto"
+        if tag_labels & {"politics", "elections", "government"}:
+            return "Politics"
+        if tag_labels & {"economics", "finance", "markets"}:
+            return "Economics/Finance"
+        if tag_labels & {"weather", "science", "climate", "space"}:
+            return "Science/Weather"
+
+    # --- Keyword fallback ---
     q = question.lower() if isinstance(question, str) else ""
 
     if _word_match(q, [
@@ -222,7 +276,7 @@ def passes_all_filters(market: dict, blocked_categories: list[str],
     question = market.get("question", "")
 
     # 1. Category check (blocklist — block risky categories)
-    category = infer_category(question)
+    category = infer_category(question, tags=get_market_tags(market))
     if category in blocked_categories:
         return False, f"blocked_category={category}"
 

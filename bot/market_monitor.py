@@ -31,6 +31,7 @@ from bot.config import BotConfig
 from bot.filters import (
     check_end_date_timing,
     check_liquidity_at_threshold,
+    get_market_tags,
     get_winning_token,
     has_subjective_language,
     infer_category,
@@ -233,7 +234,7 @@ class MarketMonitor:
                 self._seen_market_ids.add(market_id)
 
                 question = market.get("question", "")
-                category = infer_category(question)
+                category = infer_category(question, tags=get_market_tags(market))
                 if category in self.config.blocked_categories:
                     continue
 
@@ -289,7 +290,7 @@ class MarketMonitor:
                 # re-evaluated each cycle as prices change near resolution.
 
                 question = market.get("question", "")
-                category = infer_category(question)
+                category = infer_category(question, tags=get_market_tags(market))
                 if category in self.config.blocked_categories:
                     continue
 
@@ -356,14 +357,20 @@ class MarketMonitor:
                 if not first_market.get("negRisk"):
                     continue
 
+                # Extract event-level tags (authoritative category source)
+                event_tags = event.get("tags")
+
                 for market in markets:
                     market_id = str(market.get("id", ""))
                     if market_id in self._seen_market_ids:
                         continue
                     self._seen_market_ids.add(market_id)
 
+                    # Attach event tags so downstream code can use them
+                    market["_event_tags"] = event_tags
+
                     question = market.get("question", "")
-                    category = infer_category(question)
+                    category = infer_category(question, tags=event_tags)
                     if category in self.config.blocked_categories:
                         continue
 
@@ -416,7 +423,7 @@ class MarketMonitor:
                 # The _last_poll_time cutoff prevents re-processing old markets.
 
                 question = market.get("question", "")
-                category = infer_category(question)
+                category = infer_category(question, tags=get_market_tags(market))
                 if category in self.config.blocked_categories:
                     continue
 
@@ -752,7 +759,7 @@ class MarketMonitor:
         entry = WatchlistEntry(
             market_id=market_id,
             question=question,
-            category=infer_category(question),
+            category=infer_category(question, tags=get_market_tags(market)),
             end_date=end_date,
             end_date_ts=_parse_ts(end_date),
             token_ids=token_ids,
@@ -811,7 +818,7 @@ class MarketMonitor:
                 return
 
         # Step 1: Category check [FREE]
-        category = infer_category(question)
+        category = infer_category(question, tags=get_market_tags(market))
         if category in self.config.blocked_categories:
             self._log_filtered(market_id, question, category, source,
                                f"category={category}")
