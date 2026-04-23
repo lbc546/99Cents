@@ -685,18 +685,26 @@ class MarketMonitor:
             await asyncio.sleep(self.config.watchlist_scan_interval_seconds)
 
     async def _scan_watchlist(self):
-        """Iterate watchlist, evict stale entries, re-evaluate pending ones."""
+        """Iterate watchlist, evict stale entries, re-evaluate pending ones.
+
+        Weather markets are prioritized: once 3pm local passes, the daily
+        high is known and we need to buy quickly before the book dries up.
+        Weather-ready entries are scanned first with no per-cycle cap;
+        non-weather entries follow with the normal cap.
+        """
         now = time.time()
         evicted = 0
         checked = 0
         to_remove = []
 
+        # Partition entries into weather-ready (past 3pm local) and others
+        weather_ready = []
+        others = []
+
         for market_id, entry in list(self._watchlist.items()):
-            # Skip already resolved
             if entry.resolved:
                 continue
 
-            # Evict entries older than max age
             age_hours = (now - entry.added_at) / 3600
             if age_hours > self.config.watchlist_max_age_hours:
                 to_remove.append(market_id)
@@ -704,43 +712,64 @@ class MarketMonitor:
                 if self.risk_manager:
                     self.risk_manager.record_settlement_timeout(
                         market_id, entry.question)
-
                 continue
 
-            # Skip if checked recently (cooldown)
+            # Prioritize weather markets where temp is likely known
+            is_wx_ready = (entry.category == "Science/Weather"
+                           and is_weather_temp_known(entry.question))
+
+            # Skip if checked recently — weather-ready gets a shorter cooldown
             if entry.last_evaluated_at > 0:
                 since_check = now - entry.last_evaluated_at
-                if since_check < self.config.watchlist_recheck_cooldown_seconds:
+                cooldown = (30 if is_wx_ready
+                            else self.config.watchlist_recheck_cooldown_seconds)
+                if since_check < cooldown:
                     continue
 
-            # Cap checks per cycle
-            if checked >= self.config.watchlist_max_checks_per_cycle:
-                break
+            if is_wx_ready:
+                weather_ready.append((market_id, entry))
+            else:
+                others.append((market_id, entry))
 
-            # Re-fetch market detail
+        # Phase 1: Weather-ready markets — no cap, scan all of them.
+        # These are time-sensitive: the book dries up fast after resolution.
+        for market_id, entry in weather_ready:
             market_data = await self._fetch_market_detail(market_id)
             entry.last_evaluated_at = now
             checked += 1
-
             if not market_data:
                 continue
-
-            # Check if now resolved
             winning_idx, _, winning_token = get_winning_token(market_data)
             if winning_idx is not None:
                 entry.resolved = True
                 entry.winning_token = winning_token
+            await self._evaluate_market(market_data, source="watchlist_scan")
 
-            # Always evaluate — pre-resolution strategy catches high-confidence
-            # markets before official resolution (when CLOB book is still active)
+        # Phase 2: Non-weather markets — normal cap applies.
+        non_weather_checked = 0
+        for market_id, entry in others:
+            if non_weather_checked >= self.config.watchlist_max_checks_per_cycle:
+                break
+            market_data = await self._fetch_market_detail(market_id)
+            entry.last_evaluated_at = now
+            checked += 1
+            non_weather_checked += 1
+            if not market_data:
+                continue
+            winning_idx, _, winning_token = get_winning_token(market_data)
+            if winning_idx is not None:
+                entry.resolved = True
+                entry.winning_token = winning_token
             await self._evaluate_market(market_data, source="watchlist_scan")
 
         for mid in to_remove:
             del self._watchlist[mid]
 
         if checked or evicted:
-            logger.debug("Watchlist scan: checked=%d, evicted=%d, total=%d",
-                         checked, evicted, len(self._watchlist))
+            logger.debug("Watchlist scan: checked=%d (weather_ready=%d), "
+                         "evicted=%d, total=%d",
+                         checked, len(weather_ready), evicted,
+                         len(self._watchlist))
 
     # ------------------------------------------------------------------
     # Watchlist Management
@@ -857,9 +886,11 @@ class MarketMonitor:
                 except (ValueError, TypeError):
                     continue
 
-            # Require leader >= threshold AND all others <= (1 - threshold)
-            # This ensures decisive outcome, not split confidence
-            max_other = 1.0 - self.config.high_confidence_threshold
+            # Require leader >= threshold AND all others low enough to
+            # indicate a decisive outcome (not split confidence).
+            # Add 0.01 tolerance so tick-size rounding doesn't cause
+            # false rejections (e.g. No at $0.03 when threshold=0.98).
+            max_other = 1.0 - self.config.high_confidence_threshold + 0.01
             others_low = all(
                 float(outcome_prices[i]) <= max_other
                 for i in range(len(outcome_prices))
