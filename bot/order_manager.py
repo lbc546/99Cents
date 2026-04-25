@@ -542,6 +542,12 @@ class OrderManager:
         # Max shares by capital limit per market (category-specific)
         max_position_usd = self.config.max_position_per_market.get(
             category, self.config.max_position_per_market.get("default", 50))
+        # Low-temp weather markets are riskier (low can shift late in day),
+        # so cap at default position size instead of the Weather-specific limit
+        q_lower = question.lower() if question else ""
+        if category == "Science/Weather" and ("lowest" in q_lower or "low temp" in q_lower):
+            max_position_usd = min(max_position_usd,
+                                   self.config.max_position_per_market.get("default", 50))
         max_shares_by_capital = max_position_usd / fill_price
 
         # Take whatever is available, up to our max
