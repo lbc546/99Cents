@@ -1110,7 +1110,7 @@ def is_weather_temp_known(question: str) -> bool:
 
     # Determine cutoff hour based on high vs low temperature
     is_low_temp = "lowest" in q_lower or "low temp" in q_lower
-    cutoff_hour = 9 if is_low_temp else 15
+    cutoff_hour = 8 if is_low_temp else 15
 
     # Extract date from question: "on March 17" or "on March 17?"
     date_match = re.search(
