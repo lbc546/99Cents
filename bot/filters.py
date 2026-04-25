@@ -1073,21 +1073,30 @@ _CITY_TIMEZONES: dict[str, str] = {
     "praia": "Atlantic/Cape_Verde", "mindelo": "Atlantic/Cape_Verde",
 }
 
+# Precompiled word-boundary patterns for city matching (avoids re.compile per call)
+_CITY_PATTERNS: dict[str, re.Pattern] = {
+    city: re.compile(r'\b' + re.escape(city) + r'\b')
+    for city in _CITY_TIMEZONES
+}
+
 
 def is_weather_temp_known(question: str) -> bool:
-    """Check if it's late enough in the city's local time for daily high temp.
+    """Check if it's late enough in the city's local time for the temp to be known.
 
-    Daily high temperatures are typically recorded by early-mid afternoon.
-    Extracts the market date from the question and compares to local date/time.
-    Returns True only if the market date is today (local) AND local time >= 3 PM,
+    Daily HIGH temperatures are typically recorded by early-mid afternoon → 3 PM.
+    Daily LOW temperatures are typically recorded around sunrise → 9 AM.
+    Detects which type from the question text ("lowest" vs "highest").
+
+    Returns True only if the market date is today (local) AND local time >= cutoff,
     OR the market date is in the past (local).
     Returns False if city can't be identified (block unknown — safer to skip).
     Returns True if date can't be parsed (don't block non-date weather markets).
     """
     q_lower = question.lower()
     matched_city = None
-    for city in _CITY_TIMEZONES:
-        if city in q_lower:
+    for city, pattern in _CITY_PATTERNS.items():
+        # Word-boundary match to avoid "tempe" matching "temperature" etc.
+        if pattern.search(q_lower):
             if matched_city is None or len(city) > len(matched_city):
                 matched_city = city
 
@@ -1098,6 +1107,10 @@ def is_weather_temp_known(question: str) -> bool:
     local_now = datetime.now(tz)
     local_date = local_now.date()
     local_hour = local_now.hour
+
+    # Determine cutoff hour based on high vs low temperature
+    is_low_temp = "lowest" in q_lower or "low temp" in q_lower
+    cutoff_hour = 9 if is_low_temp else 15
 
     # Extract date from question: "on March 17" or "on March 17?"
     date_match = re.search(
@@ -1126,8 +1139,8 @@ def is_weather_temp_known(question: str) -> bool:
         return True  # Past date, temp is known
     if market_date > local_date:
         return False  # Future date, temp not known yet
-    # Today: check if past 3 PM local
-    return local_hour >= 15
+    # Today: check if past cutoff hour
+    return local_hour >= cutoff_hour
 
 
 def was_below_threshold_pre_close(

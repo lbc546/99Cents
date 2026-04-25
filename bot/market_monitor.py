@@ -944,12 +944,12 @@ class MarketMonitor:
         # gamma_upcoming non-weather: endDate < 1hr AND confidence >= 0.99.
         #
         # Weather guard (all sources except gamma_closed): check if it's
-        # past 5 PM local time in the market's city. Daily high temps aren't
-        # finalized until late afternoon. Uses city-to-timezone mapping.
+        # past the cutoff hour in the market's city. Daily highs use 3 PM,
+        # daily lows use 9 AM. Uses city-to-timezone mapping.
         if category == "Science/Weather" and source != "gamma_closed":
             if not is_weather_temp_known(question):
                 self._log_filtered(market_id, question, category, source,
-                                   "weather_before_3pm_local")
+                                   "weather_temp_not_known")
                 return
 
         if source == "gamma_upcoming":
