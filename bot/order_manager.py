@@ -77,8 +77,8 @@ class OrderManager:
         if self.config.dry_run:
             return None
 
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds
+        from py_clob_client_v2.client import ClobClient
+        from py_clob_client_v2.clob_types import ApiCreds
 
         if self.config.clob_api_key:
             api_creds = ApiCreds(
@@ -93,7 +93,7 @@ class OrderManager:
                 chain_id=self.config.chain_id,
                 signature_type=2,
             )
-            api_creds = tmp.create_or_derive_api_creds()
+            api_creds = tmp.create_or_derive_api_key()
             logger.warning("CLOB creds derived at runtime — set CLOB_API_KEY/SECRET/PASSPHRASE in .env")
 
         funder = self.config.polymarket_proxy_address or None
@@ -114,7 +114,7 @@ class OrderManager:
             client = self._get_client()
             if client is None:
                 return
-            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
             params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=2)
             resp = client.get_balance_allowance(params)
             raw = float(resp.get("balance", 0))
@@ -134,7 +134,7 @@ class OrderManager:
             if client is None:
                 return
 
-            from py_clob_client.clob_types import TradeParams
+            from py_clob_client_v2.clob_types import TradeParams
             trades = client.get_trades(TradeParams())
 
             # Group trades by market — aggregate BUY fills
@@ -235,7 +235,7 @@ class OrderManager:
             if client is None:
                 return
 
-            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
 
             filled = [p for p in self.positions.values() if p.status == "filled"]
             if not filled:
@@ -727,8 +727,8 @@ class OrderManager:
             return False
 
         try:
-            from py_clob_client.clob_types import OrderArgs, PartialCreateOrderOptions
-            from py_clob_client.order_builder.constants import BUY
+            from py_clob_client_v2.clob_types import OrderArgs, PartialCreateOrderOptions
+            from py_clob_client_v2.order_builder.constants import BUY
 
             resp = client.create_and_post_order(
                 OrderArgs(
@@ -898,7 +898,8 @@ class OrderManager:
             except Exception:
                 pass  # If check fails, proceed with cancel attempt
 
-            client.cancel(order_id)
+            from py_clob_client_v2.clob_types import OrderPayload
+            client.cancel_order(OrderPayload(orderID=order_id))
             pos.status = "cancelled"
             self._save_positions()
             log_event(logger, "ORDER_CANCELLED",
@@ -942,11 +943,11 @@ class OrderManager:
             return None
 
         try:
-            from py_clob_client.clob_types import OrderArgs, PartialCreateOrderOptions
-            from py_clob_client.order_builder.constants import SELL
+            from py_clob_client_v2.clob_types import OrderArgs, PartialCreateOrderOptions
+            from py_clob_client_v2.order_builder.constants import SELL
 
             # Query actual token balance to avoid "not enough balance"
-            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
             import math
             try:
                 ba = client.get_balance_allowance(
@@ -1035,7 +1036,8 @@ class OrderManager:
             return False
 
         try:
-            client.cancel(pos.cut_loss_order_id)
+            from py_clob_client_v2.clob_types import OrderPayload
+            client.cancel_order(OrderPayload(orderID=pos.cut_loss_order_id))
             pos.cut_loss_order_id = ""
             pos.cut_loss_triggered_at = 0.0
             self._save_positions()

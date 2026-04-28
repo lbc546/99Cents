@@ -17,7 +17,7 @@ import time
 
 import aiohttp
 import websockets
-from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
 
 from bot.config import BotConfig
 from bot.logger import log_event
@@ -142,8 +142,8 @@ async def _check_wallet_balance(config: BotConfig) -> str:
     NOT in the wallet's on-chain USDC.e balance. Use the CLOB API to
     check the actual available balance for trading.
     """
-    from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import ApiCreds
+    from py_clob_client_v2.client import ClobClient
+    from py_clob_client_v2.clob_types import ApiCreds
 
     if config.clob_api_key:
         creds = ApiCreds(
@@ -158,7 +158,7 @@ async def _check_wallet_balance(config: BotConfig) -> str:
             chain_id=config.chain_id,
             signature_type=2,
         )
-        creds = tmp.create_or_derive_api_creds()
+        creds = tmp.create_or_derive_api_key()
 
     funder = config.polymarket_proxy_address or None
     client = ClobClient(
