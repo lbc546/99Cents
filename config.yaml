@@ -57,6 +57,10 @@ polygon_rpc_url: "https://polygon-rpc.com"   # Overridden by POLYGON_RPC_URL env
 usdc_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 ctf_exchange_address: "0xE111180000d2663C0091e4f400237545B87B996B"  # V2 standard exchange (April 2026 upgrade)
 neg_risk_adapter_address: "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+# V2 collateral wrapper. CTF still pays out USDC.e on redemption; bot auto-wraps to pUSD.
+pusd_address: "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+collateral_onramp_address: "0x93070a847efEf7F70739046A929D47a521F5B8ee"
+auto_wrap_after_redeem: true
 
 # --- Redemption (on-chain) ---
 redemption_enabled: true           # Auto-redeem winning shares via Safe.execTransaction
@@ -87,7 +91,7 @@ clob_rate_limit_per_min: 85        # Target CLOB req/min (API limit is 100)
 gamma_rate_limit_per_min: 120      # Target Gamma req/min (defensive, no documented limit)
 
 # --- Safety ---
-dry_run: false                    # LIVE trading mode — real orders and on-chain txns
+dry_run: true                    # LIVE trading mode — real orders and on-chain txns
 
 # --- Risk Management ---
 blacklist_manual: []                   # Market IDs to always blacklist

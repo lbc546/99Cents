@@ -77,6 +77,12 @@ class BotConfig:
     polygon_rpc_url: str = "https://polygon-rpc.com"
     usdc_address: str = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     ctf_exchange_address: str = "0xE111180000d2663C0091e4f400237545B87B996B"
+    # V2 collateral: pUSD wraps USDC.e 1:1. CTF still pays out USDC.e on redemption,
+    # so the redeemer auto-wraps to pUSD via CollateralOnramp.wrap() to keep funds
+    # tradeable on the V2 exchange.
+    pusd_address: str = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+    collateral_onramp_address: str = "0x93070a847efEf7F70739046A929D47a521F5B8ee"
+    auto_wrap_after_redeem: bool = True
     neg_risk_adapter_address: str = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
 
     # Redemption (on-chain)

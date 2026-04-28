@@ -122,6 +122,52 @@ NEG_RISK_ADAPTER_ABI = [
     },
 ]
 
+# Minimal ERC-20 — used for USDC.e balance/allowance/approve on the Safe.
+ERC20_ABI = [
+    {
+        "inputs": [{"name": "owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "owner", "type": "address"},
+            {"name": "spender", "type": "address"},
+        ],
+        "name": "allowance",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "spender", "type": "address"},
+            {"name": "amount", "type": "uint256"},
+        ],
+        "name": "approve",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+]
+
+# CollateralOnramp.wrap — converts USDC.e in the Safe to pUSD 1:1.
+COLLATERAL_ONRAMP_ABI = [
+    {
+        "inputs": [
+            {"name": "_asset", "type": "address"},
+            {"name": "_to", "type": "address"},
+            {"name": "_amount", "type": "uint256"},
+        ],
+        "name": "wrap",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+]
+
 
 def _build_prevalidated_signature(owner_address: str) -> bytes:
     """Gnosis Safe pre-validated signature used when msg.sender is the owner.
@@ -149,9 +195,12 @@ class Redeemer:
         self._w3 = None
         self._ctf = None
         self._neg_risk_adapter = None
+        self._usdce = None
+        self._collateral_onramp = None
         self._safe = None
         self._account = None
         self._approval_checked = False
+        self._wrap_approval_checked = False
         self._redeem_fail_counts: dict[str, int] = {}  # order_id -> fail count
         self._redeem_next_retry: dict[str, float] = {}  # order_id -> next retry ts
 
@@ -180,6 +229,17 @@ class Redeemer:
             address=Web3.to_checksum_address(self.config.neg_risk_adapter_address),
             abi=NEG_RISK_ADAPTER_ABI,
         )
+
+        # V2 wrap path: USDC.e -> pUSD via CollateralOnramp.
+        self._usdce = self._w3.eth.contract(
+            address=Web3.to_checksum_address(self.config.usdc_address),
+            abi=ERC20_ABI,
+        )
+        self._collateral_onramp = self._w3.eth.contract(
+            address=Web3.to_checksum_address(self.config.collateral_onramp_address),
+            abi=COLLATERAL_ONRAMP_ABI,
+        )
+        self._wrap_approval_checked = False
 
         if self.config.polymarket_proxy_address:
             self._safe = self._w3.eth.contract(
@@ -480,6 +540,72 @@ class Redeemer:
             logger.exception("CTF redemption failed for market %s", pos.market_id)
             self._record_failure(pos.order_id)
 
+    async def _wrap_to_pusd(self, pos, context: str):
+        """Wrap any USDC.e in the Safe to pUSD via CollateralOnramp.
+
+        Called after a successful redemption (CTF pays out USDC.e but the
+        V2 exchange only accepts pUSD). Best-effort — failure here doesn't
+        affect the redemption outcome.
+        """
+        if not self.config.auto_wrap_after_redeem:
+            return
+        if not self._safe or not self._usdce or not self._collateral_onramp:
+            return
+        from web3 import Web3
+
+        try:
+            safe_addr = Web3.to_checksum_address(self.config.polymarket_proxy_address)
+            onramp_addr = Web3.to_checksum_address(self.config.collateral_onramp_address)
+
+            # Query USDC.e balance held by the Safe.
+            balance = await asyncio.to_thread(
+                self._usdce.functions.balanceOf(safe_addr).call
+            )
+            if balance == 0:
+                return
+
+            # Ensure CollateralOnramp is approved to pull USDC.e from the Safe.
+            # Lazy one-shot check; if missing, submit max-approval first.
+            if not self._wrap_approval_checked:
+                self._wrap_approval_checked = True
+                allowance = await asyncio.to_thread(
+                    self._usdce.functions.allowance(safe_addr, onramp_addr).call
+                )
+                if allowance < balance:
+                    max_uint = (1 << 256) - 1
+                    approve_data = self._usdce.encode_abi(
+                        abi_element_identifier="approve",
+                        args=[onramp_addr, max_uint],
+                    )
+                    usdce_addr = Web3.to_checksum_address(self.config.usdc_address)
+                    await self._submit_safe_exec(
+                        pos, usdce_addr, approve_data,
+                        context="wrap_approve",
+                        details={"spender": onramp_addr},
+                    )
+
+            # Build wrap calldata: wrap(USDC.e, safe, balance) — output goes to safe.
+            wrap_data = self._collateral_onramp.encode_abi(
+                abi_element_identifier="wrap",
+                args=[
+                    Web3.to_checksum_address(self.config.usdc_address),
+                    safe_addr,
+                    int(balance),
+                ],
+            )
+            await self._submit_safe_exec(
+                pos, onramp_addr, wrap_data,
+                context="wrap",
+                details={
+                    "amount_usdce_raw": int(balance),
+                    "amount_usdc": int(balance) / 1e6,
+                    "after": context,
+                },
+            )
+        except Exception:
+            logger.exception("Auto-wrap USDC.e -> pUSD failed for market %s",
+                             pos.market_id)
+
     async def _submit_safe_exec(self, pos, target_address: str,
                                 inner_calldata: str,
                                 context: str, details: dict):
@@ -533,28 +659,37 @@ class Redeemer:
                               "gas_usd": actual_gas_usd,
                               **details,
                           })
-                self.order_manager.mark_redeemed(pos.order_id)
-                self._redeem_fail_counts.pop(pos.order_id, None)
-                self._redeem_next_retry.pop(pos.order_id, None)
-                p = self.order_manager.positions.get(pos.order_id)
-                if p:
-                    if self.risk_manager:
-                        self.risk_manager.record_trade_result(
-                            net_profit=p.net_profit, gas_cost=actual_gas_usd,
-                            deployed=self.order_manager.total_deployed)
-                    if self.settlement_tracker:
-                        self.settlement_tracker.record_trade_completion(
-                            pos.order_id, actual_gas_usd, time.time())
+                # Mark redeemed only for redemption contexts (not the
+                # auto-wrap submissions which reuse this method).
+                if context in ("ctf", "neg_risk"):
+                    self.order_manager.mark_redeemed(pos.order_id)
+                    self._redeem_fail_counts.pop(pos.order_id, None)
+                    self._redeem_next_retry.pop(pos.order_id, None)
+                    p = self.order_manager.positions.get(pos.order_id)
+                    if p:
+                        if self.risk_manager:
+                            self.risk_manager.record_trade_result(
+                                net_profit=p.net_profit, gas_cost=actual_gas_usd,
+                                deployed=self.order_manager.total_deployed)
+                        if self.settlement_tracker:
+                            self.settlement_tracker.record_trade_completion(
+                                pos.order_id, actual_gas_usd, time.time())
+                    # CTF pays out USDC.e; auto-wrap to pUSD so funds are
+                    # immediately tradeable on the V2 exchange.
+                    await self._wrap_to_pusd(pos, context=context)
             else:
                 log_event(logger, "REDEEM_FAILED",
                           f"Safe.execTransaction reverted [{context}]: {pos.question[:60]}",
                           level="ERROR",
                           market_id=pos.market_id,
                           tx_hash=tx_hash.hex())
-                self._record_failure(pos.order_id)
+                # Wrap/approve failures shouldn't penalize the redemption.
+                if context in ("ctf", "neg_risk"):
+                    self._record_failure(pos.order_id)
         except Exception:
             logger.exception("Safe exec failed for market %s (%s)", pos.market_id, context)
-            self._record_failure(pos.order_id)
+            if context in ("ctf", "neg_risk"):
+                self._record_failure(pos.order_id)
 
     def _record_failure(self, order_id: str):
         """Exponential backoff: 5min, 10min, 20min, 40min, capped at 60min.
