@@ -19,6 +19,9 @@ capital_floor: 0                   # Stop trading if Polymarket balance drops be
 # Everything else (Politics, Crypto, Weather, etc.) passes through —
 #   price/liquidity/resolution filters handle the rest.
 blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto"]
+# Categories blocked everywhere EXCEPT gamma_closed (oracle already resolved
+# there, so the endDate-semantics concern doesn't apply).
+closed_only_categories: ["Sports", "Esports", "Entertainment"]
 max_end_date_days: 7               # Block markets with endDate more than 7 days out (speculative)
 surprise_price_cutoff: 0.50        # Filter markets that traded below this near close
 high_confidence_threshold: 0.98    # Pre-resolution: accept leading outcome >= this price
@@ -119,6 +122,9 @@ max_positions_per_category:
   Politics: 5                        # Elections/approval ratings — slow resolution (days/weeks)
   Economics/Finance: 3               # Unemployment, GDP — slow resolution
   Other: 5                           # Mixed bag, moderate cap
+  Sports: 2                          # Closed-only via closed_only_categories
+  Esports: 2                         # Closed-only via closed_only_categories
+  Entertainment: 2                   # Closed-only via closed_only_categories
   # Science/Weather and Crypto: no limit (same-day resolution)
 
 # --- Dashboard ---

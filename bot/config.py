@@ -22,6 +22,9 @@ class BotConfig:
 
     # Market filtering (blocklist — block risky categories, allow everything else)
     blocked_categories: list = field(default_factory=lambda: ["Sports", "Esports", "Entertainment"])
+    # Categories blocked everywhere EXCEPT in gamma_closed source (oracle already
+    # resolved, so endDate semantics no longer matter). Subset of blocked_categories.
+    closed_only_categories: list = field(default_factory=lambda: ["Sports", "Esports", "Entertainment"])
     surprise_price_cutoff: float = 0.50
     high_confidence_threshold: float = 0.95
 

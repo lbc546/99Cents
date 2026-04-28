@@ -424,7 +424,10 @@ class MarketMonitor:
 
                 question = market.get("question", "")
                 category = infer_category(question, tags=get_market_tags(market))
-                if category in self.config.blocked_categories:
+                # In gamma_closed, oracle has resolved — allow categories
+                # whose only block reason is endDate semantics.
+                if (category in self.config.blocked_categories
+                        and category not in self.config.closed_only_categories):
                     continue
 
                 new_count += 1
@@ -849,9 +852,13 @@ class MarketMonitor:
         # Step 1: Category check [FREE]
         category = infer_category(question, tags=get_market_tags(market))
         if category in self.config.blocked_categories:
-            self._log_filtered(market_id, question, category, source,
-                               f"category={category}")
-            return
+            # gamma_closed bypasses the block for oracle-resolved markets in
+            # categories where endDate semantics were the original concern.
+            if not (source == "gamma_closed"
+                    and category in self.config.closed_only_categories):
+                self._log_filtered(market_id, question, category, source,
+                                   f"category={category}")
+                return
 
         # Step 2: Crypto filter [FREE]
         # Block long-term crypto (daily/weekly) — too volatile before close.
