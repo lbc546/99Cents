@@ -140,6 +140,7 @@ async def main(config_path: str = "config.yaml"):
         asyncio.create_task(monitor.run_watchlist_scanner(), name="watchlist_scanner"),
         asyncio.create_task(order_mgr.monitor_open_orders(), name="order_monitor"),
         asyncio.create_task(order_mgr.run_periodic_sync(), name="position_sync"),
+        asyncio.create_task(order_mgr.run_periodic_data_api_sync(), name="data_api_sync"),
         asyncio.create_task(redeemer.check_and_redeem_settled(), name="redeemer"),
         asyncio.create_task(risk_mgr.run_periodic_stats(order_mgr.get_summary), name="risk_stats"),
         asyncio.create_task(tracker.run_rpc_resolution_monitor(), name="rpc_resolution_monitor"),

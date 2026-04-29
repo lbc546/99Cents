@@ -123,6 +123,21 @@ class OrderManager:
         except Exception as e:
             logger.warning("Failed to sync wallet balance: %s", e)
 
+    async def run_periodic_data_api_sync(self, interval_seconds: int = 43200):
+        """Re-run sync_holdings_from_data_api every interval_seconds.
+
+        Default 12 hours — backfills positions placed during the session
+        that the bot didn't track (CLOB API hiccups, restarts, etc.).
+        """
+        while True:
+            try:
+                await asyncio.sleep(interval_seconds)
+                await asyncio.to_thread(self.sync_holdings_from_data_api)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Periodic data-api sync failed")
+
     def sync_holdings_from_data_api(self):
         """Fetch current positions from Polymarket's data API and backfill.
 
