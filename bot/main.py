@@ -79,6 +79,7 @@ async def main(config_path: str = "config.yaml"):
     order_mgr = OrderManager(config)
     order_mgr.sync_wallet_balance()
     order_mgr.sync_open_positions()
+    order_mgr.sync_holdings_from_data_api()
     order_mgr.sync_pending_positions()
     order_mgr.sync_redeemed_positions()
     redeemer = Redeemer(config, order_mgr)

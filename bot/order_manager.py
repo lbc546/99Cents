@@ -123,6 +123,92 @@ class OrderManager:
         except Exception as e:
             logger.warning("Failed to sync wallet balance: %s", e)
 
+    def sync_holdings_from_data_api(self):
+        """Fetch current positions from Polymarket's data API and backfill.
+
+        Unlike sync_open_positions (which paginates trade history), this queries
+        the wallet's *current* token holdings directly. Catches positions the
+        bot doesn't know about — old fills that rolled off the trades API,
+        positions placed outside the bot, etc.
+        """
+        if not self.config.polymarket_proxy_address:
+            return
+        try:
+            import requests
+            url = "https://data-api.polymarket.com/positions"
+            resp = requests.get(
+                url,
+                params={
+                    "user": self.config.polymarket_proxy_address,
+                    "limit": 500,
+                    "sizeThreshold": 0.01,
+                },
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.warning("data-api positions returned %d", resp.status_code)
+                return
+            holdings = resp.json()
+            if not isinstance(holdings, list):
+                return
+
+            tracked_tokens = {p.token_id for p in self.positions.values() if p.token_id}
+            tracked_conditions = {p.condition_id for p in self.positions.values()
+                                  if p.condition_id}
+
+            added = 0
+            for h in holdings:
+                asset = str(h.get("asset", ""))
+                cond = str(h.get("conditionId", ""))
+                if not asset or not cond:
+                    continue
+                if asset in tracked_tokens or cond in tracked_conditions:
+                    continue
+
+                size = float(h.get("size", 0))
+                if size <= 0:
+                    continue
+                avg_price = float(h.get("avgPrice", 0)) or 0.99
+                cost = size * avg_price
+                gross = size - cost
+                net = gross - self.config.estimated_gas_cost_usd
+
+                order_id = "datasync_%s" % cond[:18]
+                outcome_idx_raw = h.get("outcomeIndex")
+                pos = Position(
+                    market_id=cond,
+                    token_id=asset,
+                    condition_id=cond,
+                    question=h.get("title") or f"[data-api] {cond[:18]}",
+                    category="",
+                    order_id=order_id,
+                    price=round(avg_price, 4),
+                    size=round(size, 2),
+                    cost=round(cost, 2),
+                    gross_profit=round(gross, 4),
+                    gas_cost=self.config.estimated_gas_cost_usd,
+                    net_profit=round(net, 4),
+                    status="filled",
+                    placed_at=time.time(),
+                    filled_at=time.time(),
+                    source="data_api_sync",
+                    neg_risk=bool(h.get("negativeRisk", False)),
+                    outcome_index=int(outcome_idx_raw) if outcome_idx_raw is not None else -1,
+                )
+                self.positions[order_id] = pos
+                added += 1
+                logger.info(
+                    "Synced from data-api: %s | size=%.2f cost=$%.2f redeemable=%s neg_risk=%s",
+                    pos.question[:60], size, cost,
+                    h.get("redeemable"), pos.neg_risk,
+                )
+
+            if added:
+                self._save_positions()
+                logger.info("data-api sync: added %d untracked positions", added)
+        except Exception as e:
+            logger.warning("data-api sync failed: %s", e)
+
     def sync_open_positions(self):
         """Fetch recent trades from CLOB API and add any untracked positions.
 
