@@ -95,7 +95,7 @@ dry_run: true                    # LIVE trading mode — real orders and on-chai
 
 # --- Risk Management ---
 blacklist_manual: []                   # Market IDs to always blacklist
-daily_loss_limit: 30                # Auto-pause if daily net loss exceeds this (USD)
+daily_loss_limit: 100                # Auto-pause if daily net loss exceeds this (USD)
 consecutive_failure_limit: 10          # Auto-pause after N consecutive failed orders
 stats_log_interval_seconds: 600        # Log daily stats every 10 minutes
 
