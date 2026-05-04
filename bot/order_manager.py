@@ -13,6 +13,7 @@ Every order goes through a pre-execution profitability check:
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -656,9 +657,13 @@ class OrderManager:
         available_shares = liquidity_usdc / fill_price if fill_price > 0 else 0
         shares = min(max_shares_by_capital, available_shares)
 
-        # Also cap by remaining available capital
-        max_shares_by_available = self.available_capital / fill_price
+        # Also cap by remaining available capital. Subtract $0.01 to absorb
+        # the CLOB's 6-decimal integer rounding (it can round cost up by a wei).
+        # Then floor shares to 2 decimals so size*price stays reliably below balance.
+        safe_capital = max(0.0, self.available_capital - 0.01)
+        max_shares_by_available = safe_capital / fill_price
         shares = min(shares, max_shares_by_available)
+        shares = math.floor(shares * 100) / 100
 
         cost = shares * fill_price
 
