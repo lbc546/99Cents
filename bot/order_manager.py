@@ -993,10 +993,18 @@ class OrderManager:
 
         try:
             # Check if order already filled before cancelling — the CLOB may
-            # have matched it between our last check and now.
+            # have matched it between our last check and now. Also detect
+            # partial fills so we don't lose track of the matched portion.
+            matched_size = 0.0
             try:
                 order = client.get_order(order_id)
                 status = (order.get("status", "").lower() if order else "")
+                if order:
+                    raw = order.get("size_matched") or order.get("matched_size") or 0
+                    try:
+                        matched_size = float(raw)
+                    except (TypeError, ValueError):
+                        matched_size = 0.0
                 if status == "matched":
                     pos.status = "filled"
                     pos.filled_at = time.time()
@@ -1011,6 +1019,23 @@ class OrderManager:
 
             from py_clob_client_v2.clob_types import OrderPayload
             client.cancel_order(OrderPayload(orderID=order_id))
+            # Preserve partial fill before marking cancelled. Without this,
+            # the matched shares sit in the wallet untracked until the next
+            # data-api sync (potentially up to 12h later).
+            if matched_size > 0 and matched_size < pos.size:
+                pos.size = round(matched_size, 4)
+                pos.cost = round(matched_size * pos.price, 4)
+                pos.gross_profit = round(matched_size - pos.cost, 4)
+                pos.net_profit = round(pos.gross_profit - pos.gas_cost, 4)
+                pos.status = "filled"
+                pos.filled_at = time.time()
+                log_event(logger, "ORDER_PARTIAL_FILLED",
+                          "Partial fill preserved at cancel: size=%.2f cost=$%.2f | %s" % (
+                              matched_size, pos.cost, pos.question[:50]),
+                          market_id=pos.market_id, order_id=order_id,
+                          details={"matched_size": matched_size})
+                self._save_positions()
+                return
             pos.status = "cancelled"
             self._save_positions()
             log_event(logger, "ORDER_CANCELLED",
