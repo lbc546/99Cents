@@ -168,9 +168,14 @@ class OrderManager:
             if not isinstance(holdings, list):
                 return
 
-            tracked_tokens = {p.token_id for p in self.positions.values() if p.token_id}
+            # Only dedupe against ACTIVE positions. Cancelled/redeemed entries
+            # don't reflect current wallet state — partial fills that got
+            # marked cancelled would otherwise be invisible to this sync.
+            active_states = ("pending", "filled")
+            tracked_tokens = {p.token_id for p in self.positions.values()
+                              if p.token_id and p.status in active_states}
             tracked_conditions = {p.condition_id for p in self.positions.values()
-                                  if p.condition_id}
+                                  if p.condition_id and p.status in active_states}
 
             added = 0
             for h in holdings:
