@@ -519,6 +519,29 @@ class Redeemer:
         from web3 import Web3
 
         try:
+            # Check the Safe still holds tokens before paying gas. If we
+            # already sold/redeemed externally, balance is 0 — mark as
+            # redeemed and skip rather than reverting on-chain.
+            if self._safe and pos.token_id:
+                try:
+                    safe_addr = Web3.to_checksum_address(
+                        self.config.polymarket_proxy_address)
+                    balance = await asyncio.to_thread(
+                        self._ctf.functions.balanceOf(
+                            safe_addr, int(pos.token_id)).call
+                    )
+                    if balance == 0:
+                        logger.info(
+                            "Redeemer: token balance is 0 for %s — already redeemed/sold externally",
+                            pos.question[:50])
+                        self.order_manager.mark_redeemed(pos.order_id)
+                        self._redeem_fail_counts.pop(pos.order_id, None)
+                        self._redeem_next_retry.pop(pos.order_id, None)
+                        return
+                except Exception as e:
+                    logger.debug("CTF balance check failed for %s: %s",
+                                 pos.order_id[:16], e)
+
             cond_bytes32 = self._to_bytes32(pos.condition_id)
             parent_collection_id = b"\x00" * 32
 
