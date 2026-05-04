@@ -882,22 +882,22 @@ class Redeemer:
         on-chain call will fail gracefully with backoff).
         """
         market_id = pos.market_id
-        if market_id.startswith("0x"):
-            return True  # CLOB-synced — let on-chain/Gamma-by-cond path decide
-
-        # Approach 1: query by market_id
-        url = "%s/markets/%s" % (self.config.gamma_base_url, market_id)
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    if resp.status == 200:
-                        market = await resp.json()
-                        if market.get("closed", False) or market.get("resolved", False):
-                            return True
-        except Exception:
-            pass
+        # Approach 1: query by numeric market_id (Gamma slug). Skip for
+        # CLOB-synced positions where market_id is a hex condition_id —
+        # those use Approach 2 below.
+        if not market_id.startswith("0x"):
+            url = "%s/markets/%s" % (self.config.gamma_base_url, market_id)
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        url, timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        if resp.status == 200:
+                            market = await resp.json()
+                            if market.get("closed", False) or market.get("resolved", False):
+                                return True
+            except Exception:
+                pass
 
         # Approach 2: query by condition_ids (catches neg-risk sub-markets)
         cond = pos.condition_id
