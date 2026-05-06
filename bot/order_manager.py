@@ -511,10 +511,16 @@ class OrderManager:
     def available_capital(self) -> float:
         # Policy limit: how much more we're allowed to deploy
         cap = self.config.max_total_deployed - self.total_deployed
-        # Also cap by actual wallet USDC (prevents over-deploying when
-        # policy says OK but wallet is low due to un-redeemed tokens)
+        # Also cap by actual wallet USDC, minus collateral the CLOB has
+        # already reserved for our pending (unfilled) orders. Without the
+        # subtraction, _wallet_balance shows the raw on-chain balance and
+        # the bot oversizes new orders → CLOB rejects with "not enough
+        # balance" because pending orders have it locked.
         if self._wallet_balance is not None:
-            cap = min(cap, self._wallet_balance)
+            pending_locked = sum(p.cost for p in self.positions.values()
+                                 if p.status == "pending")
+            liquid = max(0.0, self._wallet_balance - pending_locked)
+            cap = min(cap, liquid)
         return max(cap, 0)
 
     def _has_position_in_market(self, market_id: str, condition_id: str = "",
