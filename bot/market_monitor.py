@@ -38,6 +38,7 @@ from bot.filters import (
     is_crypto_short_term,
     is_live_event_market,
     is_weather_temp_known,
+    is_weather_lower_tail,
     parse_json_field,
     score_opportunity,
     was_below_threshold_pre_close,
@@ -915,6 +916,15 @@ class MarketMonitor:
                 reason = f"not_resolved_low={best_price:.2f}" if best_price > 0 else "not_resolved"
                 self._log_filtered(market_id, question, category, source, reason)
                 return
+
+        # Step 4 — sub-step: lower-tail high-temp markets are arb only on
+        # the NO side. Buying YES on "X°C or below" is a forecast bet.
+        if (category == "Science/Weather"
+                and is_weather_lower_tail(question)
+                and winning_idx == 0):
+            self._log_filtered(market_id, question, category, source,
+                               "weather_lower_tail_yes_blocked")
+            return
 
         # Step 4a: Subjective language [FREE]
         if has_subjective_language(question, description):

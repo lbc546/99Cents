@@ -1080,6 +1080,21 @@ _CITY_PATTERNS: dict[str, re.Pattern] = {
 }
 
 
+def is_weather_lower_tail(question: str) -> bool:
+    """Return True for high-temp lower-tail markets (e.g. "X°C or below").
+
+    By the cutoff time the temperature has cleared X (high is monotonic),
+    so NO is the locked side. Buying YES on these would be a forecast bet,
+    not arb — caller should restrict to outcome index 1 (No).
+    """
+    if not isinstance(question, str):
+        return False
+    q_lower = question.lower()
+    if "lowest" in q_lower or "low temp" in q_lower:
+        return False
+    return "or below" in q_lower or "or lower" in q_lower
+
+
 def is_weather_temp_known(question: str) -> bool:
     """Check if it's late enough in the city's local time for the temp to be known.
 
@@ -1108,9 +1123,23 @@ def is_weather_temp_known(question: str) -> bool:
     local_date = local_now.date()
     local_hour = local_now.hour
 
-    # Determine cutoff hour based on high vs low temperature
+    # Cutoff depends on market structure (high temp only — lows always 8am).
+    # Polymarket phrasings: "X°C or below" / "X°C or higher" / "X°C" (middle).
+    # Lower tail ("X or below"):  10am — high is monotonic, settled by mid-morning.
+    # Upper tail ("X or higher"): 3pm  — afternoon peak typically passed.
+    # Middle bucket ("X°C"):      5pm  — wait for late-afternoon drift to settle.
     is_low_temp = "lowest" in q_lower or "low temp" in q_lower
-    cutoff_hour = 8 if is_low_temp else 15
+    if is_low_temp:
+        cutoff_hour = 8
+    else:
+        is_lower_tail = "or below" in q_lower or "or lower" in q_lower
+        is_upper_tail = "or higher" in q_lower or "or above" in q_lower
+        if is_lower_tail:
+            cutoff_hour = 10
+        elif is_upper_tail:
+            cutoff_hour = 15
+        else:
+            cutoff_hour = 17
 
     # Extract date from question: "on March 17" or "on March 17?"
     date_match = re.search(
