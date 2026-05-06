@@ -370,6 +370,7 @@ _LIVE_EVENT_PATTERNS = [
         r"\bdeport",                     # deportations
         r"\bextraditi",                  # extraditions
         r"\bipo\b",                      # IPO filings — unpredictable timing
+        r"\bhormuz\b",                   # Strait of Hormuz transit counts — unpredictable
     ]
 ]
 
