@@ -668,10 +668,12 @@ class OrderManager:
         available_shares = liquidity_usdc / fill_price if fill_price > 0 else 0
         shares = min(max_shares_by_capital, available_shares)
 
-        # Also cap by remaining available capital. Subtract $0.01 to absorb
-        # the CLOB's 6-decimal integer rounding (it can round cost up by a wei).
-        # Then floor shares to 2 decimals so size*price stays reliably below balance.
-        safe_capital = max(0.0, self.available_capital - 0.01)
+        # Also cap by remaining available capital. The CLOB reserves cost
+        # plus a server-side fee (observed ~5 bps on weather markets) and
+        # checks against wallet balance. Apply a 0.5% buffer (50 bps) to
+        # absorb fee + tick rounding. Then floor shares to 2 decimals so
+        # size*price stays reliably below balance.
+        safe_capital = self.available_capital * 0.995
         max_shares_by_available = safe_capital / fill_price
         shares = min(shares, max_shares_by_available)
         shares = math.floor(shares * 100) / 100
