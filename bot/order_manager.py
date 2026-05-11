@@ -12,6 +12,7 @@ Every order goes through a pre-execution profitability check:
 """
 
 import asyncio
+import json
 import logging
 import math
 import time
@@ -60,6 +61,7 @@ class OrderManager:
     """
 
     POSITIONS_FILE = "data/positions.json"
+    LOSSES_FILE = "data/losses.log"
 
     def __init__(self, config: BotConfig):
         self.config = config
@@ -1194,6 +1196,7 @@ class OrderManager:
         pos.status = "cut_loss"
         pos.net_profit = -actual_loss
         self._save_positions()
+        self._log_loss_to_file(pos, "cut_loss", actual_loss)
         log_event(logger, "CUTLOSS_COMPLETED",
                   "Cut loss: sold %.1f @ $%.2f | loss=$%.2f | %s" % (
                       pos.size, sell_price, actual_loss, pos.question[:50]),
@@ -1241,6 +1244,7 @@ class OrderManager:
         pos.status = "resolved_loss"
         pos.net_profit = -pos.cost
         self._save_positions()
+        self._log_loss_to_file(pos, "resolved_loss", pos.cost)
         log_event(logger, "RESOLVED_LOSS",
                   "Position lost: %s | cost=$%.2f" % (pos.question[:60], pos.cost),
                   level="WARNING",
@@ -1253,6 +1257,82 @@ class OrderManager:
                     deployed=self.total_deployed)
             except Exception:
                 logger.exception("Failed to record loss with risk_manager")
+
+    def _log_loss_to_file(self, pos, loss_type: str, loss_amount: float):
+        """Append a JSONL line to data/losses.log for a single loss event.
+
+        One line per loss. All fields needed for grep / analysis:
+        - timestamp: when this entry was written (UTC ISO)
+        - type: "cut_loss" or "resolved_loss"
+        - loss: realized loss in USD (positive number)
+        - cost / entry_price / size: trade economics
+        - category / question: human-readable identification
+        - market_id / condition_id / token_id / order_id: on-chain identifiers
+        - outcome_index / neg_risk: which side, which market type
+        - filled_at / placed_at: timing
+        - source / score: how we found this opportunity
+        - net_profit / gross_profit: P&L fields from positions.json
+        """
+        try:
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": loss_type,
+                "loss": round(loss_amount, 4),
+                "cost": round(pos.cost, 4),
+                "entry_price": pos.price,
+                "size": pos.size,
+                "category": pos.category,
+                "question": pos.question,
+                "market_id": pos.market_id,
+                "condition_id": pos.condition_id,
+                "token_id": pos.token_id,
+                "order_id": pos.order_id,
+                "outcome_index": pos.outcome_index,
+                "neg_risk": pos.neg_risk,
+                "placed_at": pos.placed_at,
+                "filled_at": pos.filled_at,
+                "source": pos.source,
+                "score": pos.score,
+                "net_profit": pos.net_profit,
+                "gross_profit": pos.gross_profit,
+            }
+            import os
+            os.makedirs(os.path.dirname(self.LOSSES_FILE), exist_ok=True)
+            with open(self.LOSSES_FILE, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception:
+            logger.exception("Failed to write losses log entry for %s", pos.order_id)
+
+    def audit_losses(self):
+        """Backfill data/losses.log with any losses from positions.json that
+        aren't already recorded. Idempotent — dedupes by (order_id, type).
+        Call on startup so historical losses are captured in one place.
+        """
+        existing = set()
+        try:
+            with open(self.LOSSES_FILE) as f:
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                        existing.add((d.get("order_id"), d.get("type")))
+                    except Exception:
+                        continue
+        except FileNotFoundError:
+            pass
+
+        added = 0
+        for p in self.positions.values():
+            if p.status not in ("cut_loss", "resolved_loss"):
+                continue
+            key = (p.order_id, p.status)
+            if key in existing:
+                continue
+            loss = (-p.net_profit if p.status == "cut_loss" else p.cost)
+            self._log_loss_to_file(p, p.status, loss)
+            added += 1
+        if added:
+            logger.info("Losses audit: backfilled %d entries to %s",
+                        added, self.LOSSES_FILE)
 
     # ------------------------------------------------------------------
     # Summary and reporting
