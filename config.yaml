@@ -4,7 +4,7 @@
 # --- Trading Parameters ---
 price_threshold: 0.99              # Max price to pay for winning shares
 max_position_per_market:           # Max USDC per single market, by category
-  Science/Weather: 100             # Higher cap for high-confidence weather markets
+  Science/Weather: 80              # Both high and low temp weather markets
   default: 50                      # All other categories
 max_total_deployed: 1500            # Max USDC deployed across all positions
 max_open_positions: 100             # Max concurrent open positions

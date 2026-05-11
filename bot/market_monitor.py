@@ -20,6 +20,7 @@ Rate limiting:
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -960,6 +961,15 @@ class MarketMonitor:
         # gamma_upcoming weather: endDate < 4hr (afternoon peak likely passed).
         # gamma_upcoming non-weather: endDate < 1hr AND confidence >= 0.99.
         #
+        # Block specific cities that have produced disproportionate losses
+        # (frequent late-day temp drift / data revisions).
+        if category == "Science/Weather":
+            ql = question.lower()
+            if re.search(r'\b(istanbul|ankara)\b', ql):
+                self._log_filtered(market_id, question, category, source,
+                                   "weather_city_blocked")
+                return
+
         # Weather guard (all sources except gamma_closed): check if it's
         # past the cutoff hour in the market's city. Daily highs use 3 PM,
         # daily lows use 9 AM. Uses city-to-timezone mapping.
