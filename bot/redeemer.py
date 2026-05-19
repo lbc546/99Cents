@@ -363,6 +363,14 @@ class Redeemer:
                         if hours_since_fill >= 2.5 and await self._is_market_resolved(pos):
                             logger.info("Redeemer: payout=0 but Gamma says resolved, attempting: %s",
                                         pos.question[:40])
+                        elif hours_since_fill >= 24:
+                            # Force attempt: Gamma sometimes never updates
+                            # closed=true for resolved neg-risk markets. After
+                            # 24h, just try — adapter reverts safely if not
+                            # yet resolved, and after 3 reverts we mark as
+                            # resolved_loss (cheap gas given Polygon costs).
+                            logger.info("Redeemer: force-attempt (%.1fh old, Gamma not updated): %s",
+                                        hours_since_fill, pos.question[:40])
                         else:
                             logger.info("Redeemer skip (not resolved on-chain, cond=%s): %s",
                                         pos.condition_id[:18] if pos.condition_id else "EMPTY",
