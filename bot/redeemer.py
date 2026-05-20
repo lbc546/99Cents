@@ -363,13 +363,20 @@ class Redeemer:
                         if hours_since_fill >= 2.5 and await self._is_market_resolved(pos):
                             logger.info("Redeemer: payout=0 but Gamma says resolved, attempting: %s",
                                         pos.question[:40])
-                        elif hours_since_fill >= 24:
-                            # Force attempt: Gamma sometimes never updates
-                            # closed=true for resolved neg-risk markets. After
-                            # 24h, just try — adapter reverts safely if not
-                            # yet resolved, and after 3 reverts we mark as
-                            # resolved_loss (cheap gas given Polygon costs).
-                            logger.info("Redeemer: force-attempt (%.1fh old, Gamma not updated): %s",
+                        elif (hours_since_fill >= 24
+                              and pos.category == "Science/Weather"):
+                            # Force attempt for WEATHER ONLY: Gamma sometimes
+                            # never updates closed=true for resolved neg-risk
+                            # weather markets. After 24h the day's temp is
+                            # locked in, so just try — adapter reverts safely
+                            # if not yet resolved.
+                            #
+                            # WARNING: do NOT extend this to other categories.
+                            # Slow-resolution markets (Politics, Sports finals,
+                            # etc.) also revert pre-resolution; the 3-revert
+                            # rule would misinterpret as loss and prematurely
+                            # mark resolved_loss on still-pending positions.
+                            logger.info("Redeemer: force-attempt (%.1fh old, weather Gamma stale): %s",
                                         hours_since_fill, pos.question[:40])
                         else:
                             logger.info("Redeemer skip (not resolved on-chain, cond=%s): %s",
@@ -725,10 +732,12 @@ class Redeemer:
     def _record_failure(self, order_id: str):
         """Exponential backoff: 5min, 10min, 20min, 40min, capped at 60min.
 
-        For neg-risk positions, 3 consecutive on-chain reverts strongly
-        suggests the outcome we bought lost (the NegRiskAdapter rejects
-        redemption for losing outcomes). Mark as resolved_loss to stop
-        burning gas retrying.
+        After 3 reverts on a neg-risk position, verify the loss before
+        marking it as resolved_loss: simulate redemption on the *opposite*
+        side. If that simulation succeeds, the market is resolved and we
+        are confirmed the losing side. If it ALSO reverts, the market
+        isn't actually resolved yet (UMA still pending) — keep waiting,
+        don't mark a false loss.
         """
         fails = self._redeem_fail_counts.get(order_id, 0) + 1
         self._redeem_fail_counts[order_id] = fails
@@ -737,16 +746,52 @@ class Redeemer:
         logger.info("Redemption backoff: %s retry in %dm (attempt %d)",
                     order_id[:16], backoff // 60, fails)
 
-        # After 3 on-chain failures on a neg-risk position, assume it's a loss
-        if fails >= 3:
-            pos = self.order_manager.positions.get(order_id)
-            if pos and pos.neg_risk:
-                logger.warning(
-                    "Marking neg-risk position as resolved_loss after %d failures: %s",
-                    fails, pos.question[:50])
-                self.order_manager.mark_resolved_loss(order_id)
-                self._redeem_fail_counts.pop(order_id, None)
-                self._redeem_next_retry.pop(order_id, None)
+        if fails < 3:
+            return
+        pos = self.order_manager.positions.get(order_id)
+        if not pos or not pos.neg_risk:
+            return
+
+        # Verify resolution before marking loss: try redeeming the OTHER side.
+        # If both sides revert, market hasn't actually resolved — keep retrying.
+        try:
+            from web3 import Web3
+            self._init_web3()
+            if not self._neg_risk_adapter or not self._safe:
+                return
+            cond_bytes = self._to_bytes32(pos.condition_id)
+            our_idx = pos.outcome_index if 0 <= pos.outcome_index <= 1 else 0
+            other_idx = 1 - our_idx
+            test_amounts = [0, 0]
+            test_amounts[other_idx] = 1  # 1 wei to test resolvability
+            safe_addr = Web3.to_checksum_address(
+                self.config.polymarket_proxy_address)
+            other_resolves = False
+            try:
+                self._neg_risk_adapter.functions.redeemPositions(
+                    cond_bytes, test_amounts
+                ).call({"from": safe_addr})
+                other_resolves = True
+            except Exception:
+                other_resolves = False
+        except Exception:
+            logger.exception("Failed pre-loss resolution check for %s", order_id[:16])
+            return  # don't mark loss if check itself errored
+
+        if not other_resolves:
+            logger.info(
+                "Resolution not yet finalized for %s — not marking loss, will keep retrying",
+                pos.question[:50])
+            # Stretch the next retry — UMA settlement can take a while
+            self._redeem_next_retry[order_id] = time.time() + 3600
+            return
+
+        logger.warning(
+            "Marking neg-risk position as resolved_loss (opposite side redeemable): %s",
+            pos.question[:50])
+        self.order_manager.mark_resolved_loss(order_id)
+        self._redeem_fail_counts.pop(order_id, None)
+        self._redeem_next_retry.pop(order_id, None)
 
     @staticmethod
     def _to_bytes32(hex_id: str) -> bytes:
