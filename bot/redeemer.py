@@ -512,12 +512,32 @@ class Redeemer:
                 return
 
             cond_bytes32 = self._to_bytes32(pos.condition_id)
+
+            # 3a. PRE-FLIGHT: simulate the redeemPositions call as a read-only
+            # eth_call. If the adapter would revert, skip submitting the real
+            # tx — saves gas on positions waiting for UMA resolution. Backoff
+            # via _record_failure so we eventually catch confirmed losers
+            # (when opposite-side simulation succeeds).
+            try:
+                await asyncio.to_thread(
+                    self._neg_risk_adapter.functions.redeemPositions(
+                        cond_bytes32, amounts
+                    ).call,
+                    {"from": safe_addr},
+                )
+            except Exception:
+                logger.info(
+                    "Redeemer: adapter would revert (market not yet resolvable), skipping tx: %s",
+                    pos.question[:50])
+                self._record_failure(pos.order_id)
+                return
+
             inner_data = self._neg_risk_adapter.encode_abi(
                 abi_element_identifier="redeemPositions",
                 args=[cond_bytes32, amounts],
             )
 
-            # 3. Wrap in Safe.execTransaction and submit.
+            # 3b. Wrap in Safe.execTransaction and submit.
             target = Web3.to_checksum_address(self.config.neg_risk_adapter_address)
             await self._submit_safe_exec(pos, target, inner_data,
                                          context="neg_risk",
