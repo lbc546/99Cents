@@ -18,7 +18,7 @@ capital_floor: 0                   # Stop trading if Polymarket balance drops be
 # Entertainment BLOCKED: endDate semantics too inconsistent.
 # Everything else (Politics, Crypto, Weather, etc.) passes through —
 #   price/liquidity/resolution filters handle the rest.
-blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto"]
+blocked_categories: ["Sports", "Esports", "Entertainment", "Crypto", "Science/Weather"]
 # Categories blocked everywhere EXCEPT gamma_closed (oracle already resolved
 # there, so the endDate-semantics concern doesn't apply).
 closed_only_categories: ["Sports", "Esports", "Entertainment"]
