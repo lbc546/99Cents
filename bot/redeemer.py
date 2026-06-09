@@ -674,13 +674,17 @@ class Redeemer:
             signatures = _build_prevalidated_signature(self._account.address)
             zero_addr = "0x0000000000000000000000000000000000000000"
 
-            # Polygon gas pricing: eth.gas_price often returns 200-300+ gwei
-            # (inflated), but normal Polygon mainnet is 30-50 gwei. Cap at 60
-            # gwei to avoid burning MATIC paying inflated rates. If the
-            # network truly needs more, tx will sit pending — fine for
-            # non-urgent redemptions.
+            # Polygon gas pricing: eth.gas_price often returns 200-300+ gwei.
+            # Cap at 300 gwei to avoid wildly inflated submissions but stay
+            # high enough to actually clear (network can need >100 gwei
+            # during congestion).
             node_price = self._w3.eth.gas_price
-            gas_price = min(int(node_price * 1.1), 60 * 10**9)
+            gas_price = min(int(node_price * 1.1), 300 * 10**9)
+
+            # Use 'pending' nonce so concurrent submissions don't collide
+            # on the same nonce as a tx still sitting in the mempool.
+            nonce = self._w3.eth.get_transaction_count(
+                self._account.address, "pending")
 
             tx = self._safe.functions.execTransaction(
                 target_address,
@@ -696,7 +700,7 @@ class Redeemer:
             ).build_transaction({
                 "from": self._account.address,
                 "gas": 400000,  # neg-risk redemption uses ~250k; headroom only
-                "nonce": self._w3.eth.get_transaction_count(self._account.address),
+                "nonce": nonce,
                 "gasPrice": gas_price,
             })
 
